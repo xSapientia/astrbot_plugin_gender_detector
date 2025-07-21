@@ -10,9 +10,12 @@ from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 import astrbot.api.message_components as Comp
 
+# 定义插件名称为常量，方便复用
+PLUGIN_NAME = "astrbot_plugin_gender_detector"
+
 # 插件元数据注册
 @register(
-    "astrbot_plugin_gender_detector",
+    PLUGIN_NAME,
     "xSapientia",
     "智能识别用户性别并将其信息注入到LLM请求中的插件。",
     "0.0.1",
@@ -22,7 +25,12 @@ class GenderDetector(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.cache_path = Path(f"data/plugin_data/{self.metadata.name}")
+
+        # --- 错误修正 ---
+        # 直接使用预定义的插件名称字符串，而不是在初始化时尚未被赋值的 self.metadata.name
+        self.cache_path = Path(f"data/plugin_data/{PLUGIN_NAME}")
+        # -----------------
+
         self.cache_file = self.cache_path / "gender_cache.json"
         self.user_cache: Dict[str, Dict[str, Any]] = {}
         self.lock = asyncio.Lock() # 用于文件操作的异步锁
@@ -37,10 +45,10 @@ class GenderDetector(Star):
             self.cache_path.mkdir(parents=True, exist_ok=True)
             # 加载缓存
             self._load_cache()
-            logger.info(f"'{self.metadata.name}' v{self.metadata.version} 加载成功。")
+            logger.info(f"'{PLUGIN_NAME}' v0.0.1 加载成功。")
             logger.info(f"缓存已从 {self.cache_file} 加载, 共 {len(self.user_cache)} 条用户记录。")
         except Exception as e:
-            logger.error(f"'{self.metadata.name}' 初始化失败: {e}")
+            logger.error(f"'{PLUGIN_NAME}' 初始化失败: {e}")
 
     def _load_cache(self):
         """从文件加载缓存"""
@@ -68,26 +76,18 @@ class GenderDetector(Star):
         2. (模拟)API调用/逻辑分析
         3. 更新缓存
         """
-        # 1. 检查缓存
         if user_id in self.user_cache:
             return self.user_cache[user_id]
 
-        # 2. 模拟API调用/分析
-        # 在实际应用中，这里应替换为真实的性别识别API调用或基于历史消息的NLP分析
         logger.info(f"用户 {user_id} 不在缓存中, 正在进行模拟性别识别...")
-
-        # 模拟逻辑：此处返回未知，等待用户通过指令或其他方式更新
         gender = "unknown"
         nickname = ""
 
-        # 3. 更新缓存
         user_info = {"gender": gender, "nicknames": [nickname] if nickname else []}
         async with self.lock:
             self.user_cache[user_id] = user_info
 
-        # 异步保存缓存，不阻塞当前请求
         asyncio.create_task(self._save_cache())
-
         return user_info
 
     @filter.on_llm_request()
@@ -108,11 +108,10 @@ class GenderDetector(Star):
             }
             gender_prompt = prompt_map.get(gender, prompt_map["unknown"])
 
-            # 根据配置的位置插入提示词
             position = self.config.get("prompt_position", "prefix")
             if position == "prefix":
                 req.prompt = f"{gender_prompt}\n{req.prompt}"
-            else: # suffix
+            else:
                 req.prompt = f"{req.prompt}\n{gender_prompt}"
 
             logger.info(f"成功为用户 {user_id} (性别: {gender}) 注入提示词。")
@@ -127,23 +126,19 @@ class GenderDetector(Star):
         - /gender @用户: 查看被@用户的性别
         - /gender set [male/female]: 设置自己的性别
         """
-        # 提取@的用户
         target_user_id = None
         target_user_name = None
         for component in event.message_obj.message:
             if isinstance(component, Comp.At):
-                target_user_id = str(component.qq) # At组件的qq属性是用户ID
-                # 尝试获取用户名（如果消息链中有的话）
+                target_user_id = str(component.qq)
                 related_plain = next((c.text for c in event.message_obj.message if isinstance(c, Comp.Plain) and f'@{target_user_id}' not in c.text), None)
                 target_user_name = related_plain or f"用户{target_user_id}"
                 break
 
-        # 如果没有@用户，则目标是发送者自己
         if not target_user_id:
             target_user_id = event.get_sender_id()
             target_user_name = event.get_sender_name()
 
-        # 处理设置性别的逻辑
         if args and args[0].lower() == 'set' and len(args) > 1:
             if target_user_id != event.get_sender_id():
                  yield event.plain_result("不能为他人设置性别！")
@@ -159,13 +154,10 @@ class GenderDetector(Star):
                 yield event.plain_result("设置失败，性别只能是 'male' 或 'female'。")
             return
 
-        # 查询逻辑
         user_info = await self._get_user_gender_info(target_user_id)
         gender = user_info.get("gender", "unknown")
-
         reply_msg = f"查询对象: {target_user_name}\n识别性别: {gender}"
 
-        # 如果开启了调试模式，附加更多信息
         if self.config.get("enable_debug", False):
             nicknames = user_info.get("nicknames", [])
             debug_info = (
@@ -180,6 +172,6 @@ class GenderDetector(Star):
 
     async def terminate(self):
         """插件卸载/停用时调用，确保缓存被保存"""
-        logger.info(f"'{self.metadata.name}' 正在卸载，开始保存缓存...")
+        logger.info(f"'{PLUGIN_NAME}' 正在卸载，开始保存缓存...")
         await self._save_cache()
-        logger.info(f"'{self.metadata.name}' 缓存已保存，插件已卸载。")
+        logger.info(f"'{PLUGIN_NAME}' 缓存已保存，插件已卸载。")
