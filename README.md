@@ -1,4 +1,4 @@
-# astrbot_plugin_gender_detector
+# astrbot_plugin_gender_detector（有bug）
 
 智能管理用户信息并增强LLM对话体验的插件，支持QQ信息获取、历史消息分析、智能称呼管理等功能
 
