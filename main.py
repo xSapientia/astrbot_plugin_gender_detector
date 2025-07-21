@@ -16,14 +16,14 @@ import astrbot.api.message_components as Comp
     "astrbot_plugin_gender_detector",
     "xSapientia",
     "识别用户性别并在LLM请求时添加合适称呼的智能插件",
-    "0.0.1",
+    "0.0.2",
     "https://github.com/xSapientia/astrbot_plugin_gender_detector"
 )
 class GenderDetectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
 
-        # 正确处理配置
+        # 正确处理配置 - 不在初始化时调用 save_config()
         self.config = config
 
         # 确保配置有默认值
@@ -78,31 +78,18 @@ class GenderDetectorPlugin(Star):
             }
         }
 
-        # 合并默认值和用户配置
-        config_changed = False
+        # 合并默认值和用户配置 - 不在这里保存配置
         for key, value in defaults.items():
             if key not in self.config:
                 self.config[key] = value
-                config_changed = True
             elif key == "default_nicknames" and isinstance(value, dict):
                 # 特殊处理嵌套的字典
                 if not isinstance(self.config[key], dict):
                     self.config[key] = value
-                    config_changed = True
                 else:
                     for sub_key, sub_value in value.items():
                         if sub_key not in self.config[key]:
                             self.config[key][sub_key] = sub_value
-                            config_changed = True
-
-        # 只有配置真正改变时才保存
-        if config_changed:
-            try:
-                self.config.save_config()
-                if self.config.get("debug", False):
-                    logger.info("插件配置已更新并保存")
-            except Exception as e:
-                logger.error(f"保存配置失败: {e}")
 
     def _load_cache(self, file_path: Path) -> Dict:
         """加载缓存文件"""
@@ -275,19 +262,27 @@ class GenderDetectorPlugin(Star):
         try:
             # 获取客户端
             client = None
+
+            # 尝试多种方式获取客户端
             if hasattr(event, 'bot'):
                 client = event.bot
             elif hasattr(event, 'client'):
                 client = event.client
+            elif hasattr(event, '_bot'):
+                client = event._bot
+
+            # 如果还是获取不到，尝试从event的属性中查找
+            if not client:
+                for attr_name in dir(event):
+                    if 'bot' in attr_name.lower() or 'client' in attr_name.lower():
+                        attr_value = getattr(event, attr_name, None)
+                        if attr_value and hasattr(attr_value, 'api'):
+                            client = attr_value
+                            break
 
             if not client:
-                # 尝试从平台获取
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                if isinstance(event, AiocqhttpMessageEvent):
-                    client = event.bot
-
-            if not client:
-                logger.error("无法获取aiocqhttp客户端")
+                if self.config.get("debug", False):
+                    logger.error(f"无法获取客户端，event类型: {type(event)}, 属性: {[attr for attr in dir(event) if not attr.startswith('_')]}")
                 return None
 
             # 使用配置的超时时间
@@ -335,19 +330,27 @@ class GenderDetectorPlugin(Star):
         try:
             # 获取客户端
             client = None
+
+            # 尝试多种方式获取客户端
             if hasattr(event, 'bot'):
                 client = event.bot
             elif hasattr(event, 'client'):
                 client = event.client
+            elif hasattr(event, '_bot'):
+                client = event._bot
+
+            # 如果还是获取不到，尝试从event的属性中查找
+            if not client:
+                for attr_name in dir(event):
+                    if 'bot' in attr_name.lower() or 'client' in attr_name.lower():
+                        attr_value = getattr(event, attr_name, None)
+                        if attr_value and hasattr(attr_value, 'api'):
+                            client = attr_value
+                            break
 
             if not client:
-                # 尝试从平台获取
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                if isinstance(event, AiocqhttpMessageEvent):
-                    client = event.bot
-
-            if not client:
-                logger.error("无法获取aiocqhttp客户端")
+                if self.config.get("debug", False):
+                    logger.error(f"无法获取客户端进行群成员查询，event类型: {type(event)}")
                 return {}
 
             result = await client.api.call_action(
@@ -774,7 +777,12 @@ class GenderDetectorPlugin(Star):
             if not members:
                 if self.config.get("debug", False):
                     logger.error(f"无法获取群成员信息，group_id: {group_id}")
-                yield event.plain_result("❌ 无法获取群成员信息，请确认机器人在群内且有相应权限")
+                    # 尝试输出更多调试信息
+                    logger.error(f"Event类型: {type(event)}")
+                    logger.error(f"Event平台: {event.get_platform_name()}")
+                    logger.error(f"Event属性: {[attr for attr in dir(event) if not attr.startswith('_')]}")
+
+                yield event.plain_result("❌ 无法获取群成员信息，请确认：\n1. 机器人在群内\n2. 有相应权限\n3. 使用了正确的协议端（如Napcat）\n\n如果问题持续，请开启调试模式查看详细日志")
                 return
 
             # 统计信息
@@ -958,7 +966,7 @@ class GenderDetectorPlugin(Star):
     async def reload_config(self, event: AstrMessageEvent):
         """重载配置（仅管理员）"""
         try:
-            # 重新确保默认值
+            # 重新确保默认值，但不保存
             self._ensure_default_config()
 
             # 记录一些调试信息
@@ -1038,13 +1046,6 @@ class GenderDetectorPlugin(Star):
         """插件卸载时的清理工作"""
         # 保存所有缓存
         self._save_cache()
-
-        # 保存配置
-        try:
-            self.config.save_config()
-            logger.info("插件配置已保存")
-        except Exception as e:
-            logger.error(f"保存配置失败: {e}")
 
         # 删除配置文件
         config_file = Path("data/config/astrbot_plugin_gender_detector_config.json")
