@@ -1,5 +1,5 @@
 name: astrbot_plugin_gender_detector
-desc: "识别用户性别并在LLM请求时添加合适称呼的智能插件"
-version: 0.0.2
+desc: "智能识别用户性别并自动添加到 LLM prompt 的插件，支持称呼缓存和群成员扫描"
+version: 0.0.1
 author: xSapientia
 repo: https://github.com/xSapientia/astrbot_plugin_gender_detector
