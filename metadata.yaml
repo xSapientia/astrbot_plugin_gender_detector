@@ -6,7 +6,7 @@ description: 通过调用平台API识别用户性别，并将其作为上下文�
 # 作者
 author: xSapientia & 阿凌
 # 版本
-version: 0.0.1
+version: 0.0.2
 # 插件仓库地址
 repo: https://github.com/your_repo/astrbot_plugin_gender_identifier # 请替换为你的仓库地址
 # 标签
@@ -14,3 +14,4 @@ tags:
   - LLM
   - Context
   - 性别识别
+  - 调试
