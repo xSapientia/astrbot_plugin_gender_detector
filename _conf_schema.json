@@ -35,6 +35,18 @@
     "hint": "是否智能识别消息中提到但未@的用户",
     "default": true
   },
+  "enable_daily_scan": {
+    "description": "启用每日扫描",
+    "type": "bool",
+    "hint": "是否每天自动扫描所有群成员信息",
+    "default": true
+  },
+  "daily_scan_time": {
+    "description": "每日扫描时间",
+    "type": "string",
+    "hint": "格式：HH:MM，例如 03:00 表示凌晨3点",
+    "default": "03:00"
+  },
   "default_nicknames": {
     "description": "默认称呼配置",
     "type": "object",
@@ -43,17 +55,17 @@
       "male": {
         "description": "男性默认称呼",
         "type": "string",
-        "default": "小哥哥"
+        "default": "哥哥"
       },
       "female": {
         "description": "女性默认称呼",
         "type": "string",
-        "default": "小姐姐"
+        "default": "姐姐"
       },
       "unknown": {
         "description": "未知性别默认称呼",
         "type": "string",
-        "default": "朋友"
+        "default": ""
       }
     }
   }
