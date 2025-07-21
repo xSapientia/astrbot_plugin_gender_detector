@@ -43,6 +43,23 @@
       }
     }
   },
+  "manual_gender_settings": {
+    "description": "手动性别设置",
+    "type": "object",
+    "items": {
+      "enable_manual_set": {
+        "description": "允许手动设置性别",
+        "type": "bool",
+        "default": true,
+        "hint": "当 API 无法获取性别时，允许用户手动设置"
+      },
+      "admin_only": {
+        "description": "仅管理员可设置他人性别",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
   "cleanup_on_uninstall": {
     "description": "卸载时清理数据",
     "type": "object",
