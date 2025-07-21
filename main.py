@@ -2,17 +2,19 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.provider import ProviderRequest
+import astrbot.api.message_components as Comp
 import json
 import os
-from typing import Dict, Optional
+import re
+from typing import Dict, Optional, List
 import asyncio
 from datetime import datetime, timedelta
 
 @register(
     "astrbot_plugin_gender_detector",
-    "xSapientia",
+    "YourName",
     "识别用户性别并添加到LLM prompt的插件",
-    "0.0.1",
+    "0.0.2",
     "https://github.com/yourusername/astrbot_plugin_gender_detector",
 )
 class GenderDetector(Star):
@@ -40,7 +42,7 @@ class GenderDetector(Star):
         self.cache_file = os.path.join("data", "gender_cache.json")
         self.gender_cache = self._load_cache()
 
-        logger.info("Gender Detector v1.0.0 加载成功！")
+        logger.info("Gender Detector v1.1.0 加载成功！")
         if self.config.get("enable_debug", False):
             logger.info(f"调试模式已启用，缓存文件路径: {self.cache_file}")
 
@@ -82,6 +84,37 @@ class GenderDetector(Star):
 
         return cleaned_cache
 
+    def _extract_at_targets(self, message_chain: List) -> List[str]:
+        """从消息链中提取被@的用户ID列表"""
+        at_targets = []
+        for component in message_chain:
+            if isinstance(component, Comp.At):
+                at_targets.append(str(component.qq))
+        return at_targets
+
+    async def _get_user_gender_by_id(self, user_id: str, platform_name: str = None, bot_client = None) -> Optional[str]:
+        """根据用户ID获取性别信息"""
+        # 检查缓存
+        if user_id in self.gender_cache:
+            cached_info = self.gender_cache[user_id]
+            if self.config.get("enable_debug", False):
+                logger.debug(f"从缓存获取性别信息: {user_id} -> {cached_info.get('gender')}")
+            return cached_info.get("gender")
+
+        # 尝试通过API获取性别
+        gender = await self._fetch_gender_from_api_by_id(user_id, platform_name, bot_client)
+
+        # 更新缓存
+        if gender:
+            self.gender_cache[user_id] = {
+                "gender": gender,
+                "timestamp": datetime.now().isoformat(),
+                "nickname": "未知"  # 通过ID查询时无法获取昵称
+            }
+            self._save_cache()
+
+        return gender
+
     async def _get_user_gender(self, event: AstrMessageEvent) -> Optional[str]:
         """获取用户性别，优先从缓存读取"""
         user_id = event.get_sender_id()
@@ -106,6 +139,28 @@ class GenderDetector(Star):
             self._save_cache()
 
         return gender
+
+    async def _fetch_gender_from_api_by_id(self, user_id: str, platform_name: str = None, bot_client = None) -> Optional[str]:
+        """通过用户ID调用平台API获取性别"""
+        try:
+            if platform_name == "aiocqhttp" and bot_client:
+                # 调用get_stranger_info API
+                result = await bot_client.api.call_action('get_stranger_info', user_id=int(user_id))
+
+                if self.config.get("enable_debug", False):
+                    logger.debug(f"API返回数据: {result}")
+
+                if result and "data" in result:
+                    sex = result["data"].get("sex", "unknown")
+                    # QQ API: male=男, female=女, unknown=未知
+                    return sex
+
+            # 其他平台暂不支持
+            return None
+
+        except Exception as e:
+            logger.error(f"获取用户 {user_id} 性别失败: {e}")
+            return None
 
     async def _fetch_gender_from_api(self, event: AstrMessageEvent) -> Optional[str]:
         """通过平台API获取用户性别"""
@@ -188,12 +243,44 @@ class GenderDetector(Star):
             logger.error(f"修改LLM请求时出错: {e}")
 
     @filter.command("gender")
-    async def check_gender(self, event: AstrMessageEvent):
-        """查看用户性别信息"""
-        gender = await self._get_user_gender(event)
-        user_id = event.get_sender_id()
-        nickname = event.get_sender_name()
+    async def check_gender(self, event: AstrMessageEvent, target: str = None):
+        """查看用户性别信息
+        用法: /gender 或 /gender @用户"""
 
+        # 获取消息链中的@信息
+        at_targets = self._extract_at_targets(event.message_obj.message)
+
+        # 确定要查询的用户
+        if at_targets:
+            # 如果有@，查询第一个被@的用户
+            target_id = at_targets[0]
+            target_nickname = f"用户{target_id}"  # 默认昵称
+
+            # 获取bot客户端
+            bot_client = None
+            platform_name = event.get_platform_name()
+            if platform_name == "aiocqhttp":
+                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                if isinstance(event, AiocqhttpMessageEvent):
+                    bot_client = event.bot
+
+            gender = await self._get_user_gender_by_id(target_id, platform_name, bot_client)
+
+            # 尝试获取昵称
+            if bot_client and platform_name == "aiocqhttp":
+                try:
+                    result = await bot_client.api.call_action('get_stranger_info', user_id=int(target_id))
+                    if result and "data" in result:
+                        target_nickname = result["data"].get("nickname", target_nickname)
+                except:
+                    pass
+        else:
+            # 查询自己
+            target_id = event.get_sender_id()
+            target_nickname = event.get_sender_name()
+            gender = await self._get_user_gender(event)
+
+        # 生成回复信息
         if gender == "male":
             gender_text = "男性"
             prompt = self.config.get("male_prompt")
@@ -208,20 +295,23 @@ class GenderDetector(Star):
             honorific = self.config.get("unknown_honorific", "朋友")
 
         cache_info = ""
-        if user_id in self.gender_cache:
-            cache_time = self.gender_cache[user_id].get("timestamp", "未知")
+        if target_id in self.gender_cache:
+            cache_time = self.gender_cache[target_id].get("timestamp", "未知")
             cache_info = f"\n缓存时间: {cache_time}"
 
-        yield event.plain_result(
-            f"用户信息:\n"
-            f"昵称: {nickname}\n"
-            f"ID: {user_id}\n"
-            f"性别: {gender_text}\n"
-            f"敬语: {nickname}{honorific}\n"
-            f"当前提示词: {prompt}\n"
-            f"提示词位置: {self.config.get('prompt_position', 'prefix')}"
-            f"{cache_info}"
-        )
+        reply_text = f"用户信息:\n"
+        reply_text += f"昵称: {target_nickname}\n"
+        reply_text += f"ID: {target_id}\n"
+        reply_text += f"性别: {gender_text}\n"
+        reply_text += f"敬语: {target_nickname}{honorific}\n"
+
+        if target_id == event.get_sender_id():
+            # 查询自己时显示更多信息
+            reply_text += f"当前提示词: {prompt}\n"
+            reply_text += f"提示词位置: {self.config.get('prompt_position', 'prefix')}"
+            reply_text += cache_info
+
+        yield event.plain_result(reply_text)
 
     @filter.command("gender_cache")
     async def show_cache(self, event: AstrMessageEvent):
