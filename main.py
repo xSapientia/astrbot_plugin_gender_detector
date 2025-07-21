@@ -16,7 +16,7 @@ import astrbot.api.message_components as Comp
     "astrbot_plugin_gender_detector",
     "xSapientia",
     "智能识别用户性别并自动添加到 LLM prompt 的插件",
-    "0.0.1",
+    "0.0.2",
     "https://github.com/xSapientia/astrbot_plugin_gender_detector",
 )
 class GenderDetectorPlugin(Star):
@@ -29,10 +29,12 @@ class GenderDetectorPlugin(Star):
         # 缓存文件路径
         self.cache_file = self.plugin_data_dir / "user_cache.json"
         self.nickname_priority_file = self.plugin_data_dir / "nickname_priority.json"
+        self.manual_gender_file = self.plugin_data_dir / "manual_gender.json"  # 新增：手动设置的性别
 
         # 加载缓存
         self.user_cache = self._load_cache()
         self.nickname_priorities = self._load_nickname_priorities()
+        self.manual_genders = self._load_manual_genders()  # 新增：加载手动设置的性别
 
         # 扫描任务
         self.scan_task = None
@@ -82,32 +84,58 @@ class GenderDetectorPlugin(Star):
         except Exception as e:
             logger.error(f"保存称呼优先级失败: {e}")
 
-    def _parse_gender(self, sex_value) -> str:
+    def _load_manual_genders(self) -> Dict[str, str]:
+        """加载手动设置的性别"""
+        if self.manual_gender_file.exists():
+            try:
+                with open(self.manual_gender_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载手动性别设置失败: {e}")
+        return {}
+
+    def _save_manual_genders(self):
+        """保存手动设置的性别"""
+        try:
+            with open(self.manual_gender_file, 'w', encoding='utf-8') as f:
+                json.dump(self.manual_genders, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"保存手动性别设置失败: {e}")
+
+    def _parse_gender(self, sex_value, user_id: str = None) -> str:
         """解析性别值"""
         self._debug_log(f"解析性别值: {sex_value}, 类型: {type(sex_value)}")
 
-        # 尝试多种可能的格式
-        if sex_value is None:
+        # 首先检查手动设置的性别
+        if user_id and user_id in self.manual_genders:
+            manual_gender = self.manual_genders[user_id]
+            self._debug_log(f"使用手动设置的性别: {manual_gender}")
+            return manual_gender
+
+        # 处理 None 或空值
+        if sex_value is None or sex_value == "":
             return "未知"
 
         # 转换为字符串进行比较
-        sex_str = str(sex_value).lower()
+        sex_str = str(sex_value).lower().strip()
 
-        # 数字形式
-        if sex_str == "1" or sex_str == "男":
+        # 处理 "unknown" 的情况
+        if sex_str in ["unknown", "未知", "保密"]:
+            return "未知"
+
+        # 数字形式 (QQ API 标准)
+        if sex_str == "1":
             return "男"
-        elif sex_str == "2" or sex_str == "女":
+        elif sex_str == "2":
             return "女"
+        elif sex_str == "0":
+            return "未设置"
 
         # 字符串形式
-        if sex_str in ["male", "m", "男性"]:
+        if sex_str in ["male", "m", "男", "男性", "man", "boy"]:
             return "男"
-        elif sex_str in ["female", "f", "女性"]:
+        elif sex_str in ["female", "f", "女", "女性", "woman", "girl"]:
             return "女"
-
-        # 其他可能的值
-        if sex_str == "0":
-            return "未设置"
 
         return "未知"
 
@@ -119,40 +147,58 @@ class GenderDetectorPlugin(Star):
                 if isinstance(event, AiocqhttpMessageEvent):
                     client = event.bot
 
-                    # 获取用户信息
-                    user_info = await client.api.call_action('get_stranger_info', user_id=int(user_id))
+                    # 尝试多种方式获取用户信息
+                    user_info = None
 
-                    # 详细调试信息
-                    self._debug_log(f"API返回的完整用户信息: {json.dumps(user_info, ensure_ascii=False)}")
+                    # 如果在群聊中，优先使用 get_group_member_info
+                    if event.get_group_id():
+                        try:
+                            member_info = await client.api.call_action(
+                                'get_group_member_info',
+                                group_id=int(event.get_group_id()),
+                                user_id=int(user_id)
+                            )
+                            user_info = member_info
+                            self._debug_log(f"通过 get_group_member_info 获取: {json.dumps(member_info, ensure_ascii=False)}")
+                        except Exception as e:
+                            self._debug_log(f"get_group_member_info 失败: {e}")
 
-                    # 尝试不同的字段名
-                    sex_value = None
-                    possible_fields = ['sex', 'gender', 'Sex', 'Gender', 'user_sex']
+                    # 如果群成员信息获取失败或在私聊中，尝试 get_stranger_info
+                    if not user_info:
+                        try:
+                            stranger_info = await client.api.call_action('get_stranger_info', user_id=int(user_id))
+                            user_info = stranger_info
+                            self._debug_log(f"通过 get_stranger_info 获取: {json.dumps(stranger_info, ensure_ascii=False)}")
+                        except Exception as e:
+                            self._debug_log(f"get_stranger_info 失败: {e}")
 
-                    for field in possible_fields:
-                        if field in user_info:
-                            sex_value = user_info[field]
-                            self._debug_log(f"在字段 '{field}' 中找到性别值: {sex_value}")
-                            break
+                    if not user_info:
+                        return None
 
-                    if sex_value is None:
-                        self._debug_log("未找到性别字段，可用字段: " + str(list(user_info.keys())))
+                    # 提取性别信息
+                    sex_value = user_info.get("sex", "unknown")
+                    gender = self._parse_gender(sex_value, user_id)
 
-                    gender = self._parse_gender(sex_value)
+                    # 获取昵称，优先使用群名片
+                    nickname = user_info.get("card", "") or user_info.get("nickname", "未知")
+
+                    # 提取群头衔（如果有）
+                    title = user_info.get("title", "")
 
                     return {
                         "user_id": user_id,
-                        "nickname": user_info.get("nickname", "未知"),
+                        "nickname": nickname,
+                        "card": user_info.get("card", ""),
+                        "title": title,
                         "gender": gender,
                         "raw_sex": sex_value,
-                        "api_response": user_info,  # 保存完整响应用于调试
+                        "role": user_info.get("role", "member"),
                         "update_time": datetime.now().isoformat()
                     }
+
             except Exception as e:
                 self._debug_log(f"获取用户 {user_id} 信息失败: {str(e)}")
                 logger.error(f"获取用户信息异常: {type(e).__name__}: {str(e)}")
-                import traceback
-                self._debug_log(f"错误堆栈: {traceback.format_exc()}")
         return None
 
     async def _scan_group_members(self, event: AstrMessageEvent) -> Dict[str, Dict]:
@@ -171,32 +217,28 @@ class GenderDetectorPlugin(Star):
 
                     self._debug_log(f"API返回群成员数: {len(members)}")
 
-                    # 打印第一个成员的完整数据结构
-                    if members and self.config.get("show_debug_info", False):
-                        self._debug_log(f"第一个成员的数据结构: {json.dumps(members[0], ensure_ascii=False)}")
-
                     for idx, member in enumerate(members):
                         user_id = str(member.get("user_id"))
-
-                        # 尝试不同的字段名
-                        sex_value = None
-                        possible_fields = ['sex', 'gender', 'Sex', 'Gender', 'user_sex']
-
-                        for field in possible_fields:
-                            if field in member:
-                                sex_value = member[field]
-                                break
+                        sex_value = member.get("sex", "unknown")
+                        gender = self._parse_gender(sex_value, user_id)
 
                         # 仅对前3个用户输出详细调试信息
                         if idx < 3 and self.config.get("show_debug_info", False):
-                            self._debug_log(f"成员{idx+1} - ID:{user_id}, 性别字段:{sex_value}, 可用字段:{list(member.keys())}")
+                            self._debug_log(f"成员{idx+1} - ID:{user_id}, 性别原始值:{sex_value}, 解析后:{gender}")
 
-                        gender = self._parse_gender(sex_value)
+                        # 获取最佳昵称（优先级：群头衔 > 群名片 > 昵称）
+                        title = member.get("title", "")
+                        card = member.get("card", "")
+                        nickname = member.get("nickname", "未知")
+
+                        display_name = title or card or nickname
 
                         scanned_users[user_id] = {
                             "user_id": user_id,
-                            "nickname": member.get("nickname", "未知"),
-                            "card": member.get("card", ""),
+                            "nickname": nickname,
+                            "card": card,
+                            "title": title,
+                            "display_name": display_name,
                             "gender": gender,
                             "raw_sex": sex_value,
                             "role": member.get("role", "member"),
@@ -211,14 +253,12 @@ class GenderDetectorPlugin(Star):
                     # 统计
                     male_count = sum(1 for u in scanned_users.values() if u.get("gender") == "男")
                     female_count = sum(1 for u in scanned_users.values() if u.get("gender") == "女")
-                    unknown_count = len(scanned_users) - male_count - female_count
+                    unknown_count = sum(1 for u in scanned_users.values() if u.get("gender") in ["未知", "未设置"])
 
-                    self._debug_log(f"扫描完成 - 总数:{len(scanned_users)}, 男:{male_count}, 女:{female_count}, 未知:{unknown_count}")
+                    self._debug_log(f"扫描完成 - 总数:{len(scanned_users)}, 男:{male_count}, 女:{female_count}, 未知/未设置:{unknown_count}")
 
             except Exception as e:
                 logger.error(f"扫描群成员失败: {type(e).__name__}: {str(e)}")
-                import traceback
-                self._debug_log(f"错误堆栈:\n{traceback.format_exc()}")
 
         return scanned_users
 
@@ -328,12 +368,14 @@ class GenderDetectorPlugin(Star):
 
     def _get_best_nickname(self, user_id: str) -> Optional[str]:
         """获取最佳称呼"""
+        # 优先从称呼优先级中获取
         if user_id in self.nickname_priorities and self.nickname_priorities[user_id]:
             return self.nickname_priorities[user_id][0]["nickname"]
 
-        # 从缓存获取默认昵称
+        # 从缓存获取（优先级：群头衔 > 群名片 > 昵称）
         if user_id in self.user_cache:
-            return self.user_cache[user_id].get("card") or self.user_cache[user_id].get("nickname")
+            cache = self.user_cache[user_id]
+            return cache.get("title") or cache.get("card") or cache.get("nickname")
 
         return None
 
@@ -387,6 +429,13 @@ class GenderDetectorPlugin(Star):
                 user_info = None
                 if user_id in self.user_cache:
                     user_info = self.user_cache[user_id]
+                    # 检查缓存是否需要更新
+                    if self._should_update_cache(user_info):
+                        new_info = await self._get_user_info_from_platform(event, user_id)
+                        if new_info:
+                            user_info = new_info
+                            self._update_user_cache(user_id, user_info)
+                            self._save_cache()
                 else:
                     user_info = await self._get_user_info_from_platform(event, user_id)
                     if user_info:
@@ -397,6 +446,7 @@ class GenderDetectorPlugin(Star):
                     gender = user_info.get("gender", "未知")
                     nickname = self._get_best_nickname(user_id) or user_info.get("nickname", "用户")
 
+                    # 构建用户描述
                     user_desc = f"{nickname}({gender})"
                     if user_id == event.get_sender_id():
                         user_desc = f"[发送者]{user_desc}"
@@ -418,6 +468,15 @@ class GenderDetectorPlugin(Star):
 
         except Exception as e:
             logger.error(f"处理 LLM 请求时出错: {e}")
+
+    def _should_update_cache(self, user_info: Dict) -> bool:
+        """检查是否需要更新缓存"""
+        # 如果性别是未知且没有手动设置，应该尝试更新
+        if user_info.get("gender") in ["未知", "未设置"]:
+            user_id = user_info.get("user_id")
+            if user_id and user_id not in self.manual_genders:
+                return True
+        return False
 
     def _identify_involved_users(self, event: AstrMessageEvent) -> Set[str]:
         """识别消息中涉及的用户"""
@@ -498,10 +557,17 @@ class GenderDetectorPlugin(Star):
             gender = user_info.get("gender", "未知")
             nickname = self._get_best_nickname(target_user_id) or user_info.get("nickname", "用户")
 
+            # 构建基本信息
             if target_nickname == "你":
-                yield event.plain_result(f"你的性别是: {gender}")
+                result = f"你的性别是: {gender}"
             else:
-                yield event.plain_result(f"{nickname} 的性别是: {gender}")
+                result = f"{nickname} 的性别是: {gender}"
+
+            # 如果性别未知，提示可以手动设置
+            if gender in ["未知", "未设置"] and self.config.get("manual_gender_settings", {}).get("enable_manual_set", True):
+                result += "\n\n提示：性别未设置或无法获取，可以使用 /gender_set 命令手动设置"
+
+            yield event.plain_result(result)
 
             # 显示称呼优先级（调试模式）
             if self.config.get("show_debug_info", False) and target_user_id in self.nickname_priorities:
@@ -515,6 +581,69 @@ class GenderDetectorPlugin(Star):
                 yield event.plain_result(f"[调试] 原始性别值: {raw_sex}")
         else:
             yield event.plain_result("无法获取用户信息，请稍后重试")
+
+    @filter.command("gender_set", alias={"设置性别"})
+    async def set_gender_manually(self, event: AstrMessageEvent, gender: str = None):
+        """手动设置用户性别"""
+        if not self.config.get("enable_plugin", True):
+            yield event.plain_result("插件已禁用")
+            return
+
+        manual_settings = self.config.get("manual_gender_settings", {})
+        if not manual_settings.get("enable_manual_set", True):
+            yield event.plain_result("手动设置性别功能已禁用")
+            return
+
+        # 检查是否有 At（设置他人性别）
+        target_user_id = None
+        target_nickname = None
+
+        for comp in event.message_obj.message:
+            if isinstance(comp, Comp.At):
+                target_user_id = str(comp.qq)
+                # 检查权限
+                if manual_settings.get("admin_only", True):
+                    # 这里需要检查发送者是否是管理员
+                    # 暂时简化处理
+                    pass
+                break
+
+        # 如果没有 At，设置自己的性别
+        if not target_user_id:
+            target_user_id = event.get_sender_id()
+            target_nickname = "你"
+
+        # 解析性别参数
+        if not gender:
+            yield event.plain_result("请指定性别：男/女\n用法：/gender_set 男")
+            return
+
+        gender_lower = gender.lower().strip()
+        if gender_lower in ["男", "male", "m", "男性"]:
+            normalized_gender = "男"
+        elif gender_lower in ["女", "female", "f", "女性"]:
+            normalized_gender = "女"
+        else:
+            yield event.plain_result("无效的性别值，请使用：男/女")
+            return
+
+        # 保存手动设置的性别
+        self.manual_genders[target_user_id] = normalized_gender
+        self._save_manual_genders()
+
+        # 更新缓存
+        if target_user_id in self.user_cache:
+            self.user_cache[target_user_id]["gender"] = normalized_gender
+            self.user_cache[target_user_id]["update_time"] = datetime.now().isoformat()
+            self._save_cache()
+
+        # 获取昵称
+        nickname = self._get_best_nickname(target_user_id) or "用户"
+
+        if target_nickname == "你":
+            yield event.plain_result(f"已设置你的性别为: {normalized_gender}")
+        else:
+            yield event.plain_result(f"已设置 {nickname} 的性别为: {normalized_gender}")
 
     @filter.command("gender_scan", alias={"gscan", "群扫描"})
     async def manual_scan(self, event: AstrMessageEvent):
@@ -534,18 +663,26 @@ class GenderDetectorPlugin(Star):
         if scanned:
             male_count = sum(1 for u in scanned.values() if u.get("gender") == "男")
             female_count = sum(1 for u in scanned.values() if u.get("gender") == "女")
-            unknown_count = len(scanned) - male_count - female_count
+            unknown_count = sum(1 for u in scanned.values() if u.get("gender") in ["未知", "未设置"])
 
             result = f"扫描完成！\n"
             result += f"总人数: {len(scanned)}\n"
             result += f"男性: {male_count} 人\n"
             result += f"女性: {female_count} 人\n"
-            result += f"未知: {unknown_count} 人"
+            result += f"未知/未设置: {unknown_count} 人"
+
+            # 提示可以手动设置
+            if unknown_count > 0 and self.config.get("manual_gender_settings", {}).get("enable_manual_set", True):
+                result += f"\n\n提示：有 {unknown_count} 人性别未知，可使用 /gender_set 命令手动设置"
 
             # 调试模式下显示详细信息
             if self.config.get("show_debug_info", False) and unknown_count > 0:
-                unknown_users = [f"{u['nickname']}(sex={u.get('raw_sex')})"
-                               for u in scanned.values() if u.get("gender") == "未知"]
+                unknown_users = []
+                for u in scanned.values():
+                    if u.get("gender") in ["未知", "未设置"]:
+                        display_name = u.get("display_name", u.get("nickname", "未知"))
+                        unknown_users.append(f"{display_name}(sex={u.get('raw_sex')})")
+
                 result += f"\n\n[调试] 未知性别用户:\n" + "\n".join(unknown_users[:10])
                 if len(unknown_users) > 10:
                     result += f"\n... 还有 {len(unknown_users) - 10} 个未显示"
@@ -588,6 +725,12 @@ class GenderDetectorPlugin(Star):
                                 user_id=int(sender_id)
                             )
                             yield event.plain_result(f"\n[get_group_member_info 响应]\n{json.dumps(member_info, ensure_ascii=False, indent=2)}")
+
+                            # 解析性别
+                            sex_value = member_info.get("sex", "unknown")
+                            parsed_gender = self._parse_gender(sex_value, sender_id)
+                            yield event.plain_result(f"\n[性别解析]\n原始值: {sex_value}\n解析结果: {parsed_gender}")
+
                         except Exception as e:
                             yield event.plain_result(f"get_group_member_info 失败: {str(e)}")
 
@@ -597,6 +740,17 @@ class GenderDetectorPlugin(Star):
                         yield event.plain_result(f"\n[机器人信息]\n{json.dumps(login_info, ensure_ascii=False, indent=2)}")
                     except:
                         pass
+
+                    # 显示缓存和手动设置信息
+                    cache_info = "无"
+                    if sender_id in self.user_cache:
+                        cache_info = f"性别: {self.user_cache[sender_id].get('gender')}, 更新时间: {self.user_cache[sender_id].get('update_time')}"
+
+                    manual_info = "无"
+                    if sender_id in self.manual_genders:
+                        manual_info = f"手动设置为: {self.manual_genders[sender_id]}"
+
+                    yield event.plain_result(f"\n[本地数据]\n缓存信息: {cache_info}\n手动设置: {manual_info}")
 
             except Exception as e:
                 yield event.plain_result(f"诊断过程出错: {str(e)}")
@@ -623,6 +777,7 @@ class GenderDetectorPlugin(Star):
         # 保存缓存
         self._save_cache()
         self._save_nickname_priorities()
+        self._save_manual_genders()
 
         # 根据配置决定是否删除数据
         cleanup_config = self.config.get("cleanup_on_uninstall", {})
