@@ -4,7 +4,7 @@ name: astrbot_plugin_gender_identifier
 # 描述
 description: 通过调用平台API识别用户性别，并将其作为上下文添加到LLM的提示词中，增强机器人的情境感知能力。
 # 作者
-author: xSapientia & 阿凌
+author: xSapientia
 # 版本
 version: 0.0.2
 # 插件仓库地址
