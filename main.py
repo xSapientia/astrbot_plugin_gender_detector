@@ -6,6 +6,8 @@ import astrbot.api.message_components as Comp
 import json
 import re
 import asyncio
+import os
+import shutil
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
@@ -34,6 +36,12 @@ class GenderDetector(Star):
                 "prompt_position": "prefix"
             }
 
+        # 设置数据存储路径
+        self.plugin_data_dir = os.path.join("data", "plugin_data", "astrbot_plugin_gender_detector")
+        os.makedirs(self.plugin_data_dir, exist_ok=True)
+
+        self.cache_file = os.path.join(self.plugin_data_dir, "gender_cache.json")
+
         # 性别缓存: {user_id: {"gender": "male/female/unknown", "last_update": timestamp}}
         self.gender_cache = {}
 
@@ -43,18 +51,16 @@ class GenderDetector(Star):
         # 加载持久化数据
         self._load_cache()
 
-        logger.info("Gender Detector v1.0.0 加载成功！")
+        logger.info("Gender Detector v0.0.1 加载成功！")
 
         # 启动定期清理过期缓存的任务
-        asyncio.create_task(self._cleanup_expired_cache())
+        self.cleanup_task = asyncio.create_task(self._cleanup_expired_cache())
 
     def _load_cache(self):
         """从文件加载缓存数据"""
         try:
-            import os
-            cache_file = os.path.join(self.context.get_config()['data_path'], 'gender_cache.json')
-            if os.path.exists(cache_file):
-                with open(cache_file, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     self.gender_cache = data.get('gender_cache', {})
                     self.nickname_cache = data.get('nickname_cache', {})
@@ -65,10 +71,8 @@ class GenderDetector(Star):
     def _save_cache(self):
         """保存缓存数据到文件"""
         try:
-            import os
-            cache_file = os.path.join(self.context.get_config()['data_path'], 'gender_cache.json')
-            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-            with open(cache_file, 'w', encoding='utf-8') as f:
+            os.makedirs(self.plugin_data_dir, exist_ok=True)
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     'gender_cache': self.gender_cache,
                     'nickname_cache': self.nickname_cache
@@ -374,11 +378,34 @@ class GenderDetector(Star):
 - 插件状态: {'启用' if self.config.get('enable_plugin', True) else '禁用'}
 - 调试模式: {'开启' if self.config.get('show_debug', False) else '关闭'}
 - 最大昵称数: {self.config.get('max_nicknames', 3)}
-- 缓存有效期: {self.config.get('cache_expire_hours', 168)} 小时"""
+- 缓存有效期: {self.config.get('cache_expire_hours', 168)} 小时
+
+数据目录: {self.plugin_data_dir}"""
 
         yield event.plain_result(stats)
 
     async def terminate(self):
-        """插件卸载时保存缓存"""
-        self._save_cache()
-        logger.info("Gender Detector 插件已卸载，缓存已保存")
+        """插件卸载时清理数据"""
+        try:
+            # 保存最后的缓存
+            self._save_cache()
+
+            # 取消清理任务
+            if hasattr(self, 'cleanup_task') and self.cleanup_task:
+                self.cleanup_task.cancel()
+
+            # 删除配置文件
+            config_file = os.path.join("data", "config", "astrbot_plugin_gender_detector_config.json")
+            if os.path.exists(config_file):
+                os.remove(config_file)
+                logger.info(f"已删除配置文件: {config_file}")
+
+            # 删除插件数据目录
+            if os.path.exists(self.plugin_data_dir):
+                shutil.rmtree(self.plugin_data_dir)
+                logger.info(f"已删除数据目录: {self.plugin_data_dir}")
+
+            logger.info("astrbot_plugin_gender_detector 插件已完全卸载")
+
+        except Exception as e:
+            logger.error(f"插件卸载时出错: {e}")
