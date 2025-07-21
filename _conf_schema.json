@@ -4,6 +4,11 @@
     "type": "bool",
     "default": true
   },
+  "enable_debug_log": {
+    "description": "启用详细的调试日志输出。开启后，插件的每一步操作（如缓存命中、API调用）都会记录在日志中，方便排查问题。",
+    "type": "bool",
+    "default": false
+  },
   "male_prompt": {
     "description": "检测到用户为男性时，添加到提示词的内容。",
     "type": "string",
