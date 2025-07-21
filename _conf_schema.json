@@ -1,50 +1,109 @@
 {
-  "enable_injection": {
-    "description": "启用LLM上下文注入",
+  "enable_plugin": {
+    "description": "插件总开关",
     "type": "bool",
-    "default": true,
-    "hint": "是否在LLM请求时自动注入发送者和提及用户的详细信息。"
+    "default": true
   },
-  "cache_expiry_hours": {
-    "description": "缓存有效期（小时）",
-    "type": "int",
-    "default": 72,
-    "hint": "用户信息缓存多久后过期，过期后会重新获取。"
+  "cache_settings": {
+    "description": "缓存设置",
+    "type": "object",
+    "items": {
+      "cache_valid_days": {
+        "description": "缓存有效期(天)",
+        "type": "int",
+        "default": 7,
+        "hint": "用户信息缓存的有效天数"
+      },
+      "max_nicknames": {
+        "description": "最大称呼数量",
+        "type": "int",
+        "default": 5,
+        "hint": "每个用户最多缓存的称呼数量"
+      }
+    }
   },
-  "enable_daily_scan": {
-    "description": "启用每日群组扫描",
-    "type": "bool",
-    "default": true,
-    "hint": "是否每天定时扫描所有群组的成员信息以更新缓存。"
+  "scan_settings": {
+    "description": "群成员扫描设置",
+    "type": "object",
+    "items": {
+      "enable_daily_scan": {
+        "description": "启用每日扫描",
+        "type": "bool",
+        "default": true
+      },
+      "scan_time": {
+        "description": "扫描时间",
+        "type": "string",
+        "default": "03:00",
+        "hint": "格式: HH:MM，如 03:00"
+      }
+    }
   },
-  "daily_scan_time": {
-    "description": "每日扫描时间 (HH:MM)",
-    "type": "string",
-    "default": "03:00",
-    "hint": "设置每日扫描的执行时间（24小时制）。"
+  "history_settings": {
+    "description": "历史消息设置",
+    "type": "object",
+    "items": {
+      "history_count": {
+        "description": "读取历史消息条数",
+        "type": "int",
+        "default": 100,
+        "hint": "智能整理时读取的历史消息条数"
+      }
+    }
   },
-  "nickname_cache_limit": {
-    "description": "每个用户缓存的称呼数量上限",
-    "type": "int",
-    "default": 5,
-    "hint": "最多为每个用户缓存多少个不同的称呼。"
+  "prompt_settings": {
+    "description": "提示词设置",
+    "type": "object",
+    "items": {
+      "enable_prompt_inject": {
+        "description": "启用提示词注入",
+        "type": "bool",
+        "default": true
+      },
+      "insert_user_count": {
+        "description": "插入用户统计",
+        "type": "bool",
+        "default": true
+      },
+      "insert_sender_info": {
+        "description": "插入发送者信息",
+        "type": "bool",
+        "default": true
+      },
+      "insert_mentioned_info": {
+        "description": "插入被提及者信息",
+        "type": "bool",
+        "default": true
+      }
+    }
   },
-  "show_debug_log": {
-    "description": "显示调试日志",
-    "type": "bool",
-    "default": false,
-    "hint": "在控制台输出插件的调试信息。"
+  "debug_settings": {
+    "description": "调试设置",
+    "type": "object",
+    "items": {
+      "show_debug": {
+        "description": "显示调试信息",
+        "type": "bool",
+        "default": false
+      }
+    }
   },
-  "delete_data_on_uninstall": {
-    "description": "卸载时删除缓存数据",
-    "type": "bool",
-    "default": false,
-    "hint": "停用或卸载插件时，是否删除用户缓存数据(user_cache.json)。"
-  },
-  "delete_config_on_uninstall": {
-    "description": "卸载时删除配置文件",
-    "type": "bool",
-    "default": false,
-    "hint": "停用或卸载插件时，是否删除插件自身的配置文件。"
+  "cleanup_settings": {
+    "description": "清理设置",
+    "type": "object",
+    "items": {
+      "delete_plugin_data": {
+        "description": "卸载时删除插件数据",
+        "type": "bool",
+        "default": false,
+        "hint": "卸载插件时是否删除plugin_data目录下的数据"
+      },
+      "delete_config": {
+        "description": "卸载时删除配置文件",
+        "type": "bool",
+        "default": false,
+        "hint": "卸载插件时是否删除config目录下的配置文件"
+      }
+    }
   }
 }
