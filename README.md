@@ -1,4 +1,3 @@
-```markdown
 # astrbot_plugin_gender_detector
 
 智能识别用户性别并自动添加到 LLM prompt 的插件，支持称呼缓存和群成员扫描
@@ -244,4 +243,3 @@
 [报告问题](https://github.com/xSapientia/astrbot_plugin_gender_detector/issues) · [功能建议](https://github.com/xSapientia/astrbot_plugin_gender_detector/issues) · [查看更多插件](https://github.com/xSapientia)
 
 </div>
-```
