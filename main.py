@@ -4,6 +4,7 @@ import asyncio
 import re
 from typing import Dict, List, Optional, Set, Tuple
 from pathlib import Path
+from datetime import datetime, time
 
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
@@ -15,7 +16,7 @@ import astrbot.api.message_components as Comp
     "astrbot_plugin_gender_detector",
     "xSapientia",
     "识别用户性别并在LLM请求时添加合适称呼的智能插件",
-    "0.0.1",
+    "0.0.2",
     "https://github.com/xSapientia/astrbot_plugin_gender_detector"
 )
 class GenderDetectorPlugin(Star):
@@ -36,11 +37,13 @@ class GenderDetectorPlugin(Star):
         self.cache_file = self.data_dir / "gender_cache.json"
         self.nickname_cache_file = self.data_dir / "nickname_cache.json"
         self.user_alias_file = self.data_dir / "user_alias.json"  # 用户别名映射
+        self.scan_history_file = self.data_dir / "scan_history.json"  # 扫描历史记录
 
         # 加载缓存
         self.gender_cache = self._load_cache(self.cache_file)
         self.nickname_cache = self._load_cache(self.nickname_cache_file)
         self.user_alias_cache = self._load_cache(self.user_alias_file)  # 别名到user_id的映射
+        self.scan_history = self._load_cache(self.scan_history_file)  # 群扫描历史
 
         # 临时存储已处理的消息ID，避免重复处理
         self.processed_messages: Set[str] = set()
@@ -51,6 +54,7 @@ class GenderDetectorPlugin(Star):
         # 启动异步任务
         asyncio.create_task(self._periodic_cache_save())
         asyncio.create_task(self._periodic_group_members_update())
+        asyncio.create_task(self._daily_group_scan())  # 新增：每日群成员扫描
 
         if self.config.get("debug", False):
             logger.info(f"性别检测插件已启动，缓存数据: {len(self.gender_cache)} 条性别记录, {len(self.nickname_cache)} 条称呼记录")
@@ -64,7 +68,9 @@ class GenderDetectorPlugin(Star):
             "gender_api_timeout": 5,
             "cache_expire_days": 30,
             "enable_nickname_learning": True,
-            "enable_smart_user_detection": True,  # 新增：启用智能用户识别
+            "enable_smart_user_detection": True,
+            "enable_daily_scan": True,  # 新增：启用每日扫描
+            "daily_scan_time": "03:00",  # 新增：每日扫描时间
             "default_nicknames": {
                 "male": "小哥哥",
                 "female": "小姐姐",
@@ -107,6 +113,8 @@ class GenderDetectorPlugin(Star):
                 json.dump(self.nickname_cache, f, ensure_ascii=False, indent=2)
             with open(self.user_alias_file, 'w', encoding='utf-8') as f:
                 json.dump(self.user_alias_cache, f, ensure_ascii=False, indent=2)
+            with open(self.scan_history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.scan_history, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存缓存失败: {e}")
 
@@ -122,6 +130,126 @@ class GenderDetectorPlugin(Star):
             await asyncio.sleep(600)  # 每10分钟更新一次
             # 清理过期的群成员缓存
             self.group_members_cache.clear()
+
+    async def _daily_group_scan(self):
+        """每日定时扫描群成员"""
+        if not self.config.get("enable_daily_scan", True):
+            return
+
+        while True:
+            try:
+                # 计算下次扫描时间
+                scan_time_str = self.config.get("daily_scan_time", "03:00")
+                hour, minute = map(int, scan_time_str.split(':'))
+
+                now = datetime.now()
+                next_scan = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+                if next_scan <= now:
+                    # 如果今天的扫描时间已过，设置为明天
+                    next_scan = next_scan.replace(day=next_scan.day + 1)
+
+                # 等待到扫描时间
+                wait_seconds = (next_scan - now).total_seconds()
+                if self.config.get("debug", False):
+                    logger.info(f"下次群成员扫描将在 {next_scan} 进行，等待 {wait_seconds} 秒")
+
+                await asyncio.sleep(wait_seconds)
+
+                # 执行扫描
+                await self._scan_all_groups()
+
+            except Exception as e:
+                logger.error(f"每日群扫描任务出错: {e}")
+                await asyncio.sleep(3600)  # 出错后等待1小时再试
+
+    async def _scan_all_groups(self):
+        """扫描所有群的成员信息"""
+        try:
+            logger.info("开始执行每日群成员扫描...")
+
+            # 获取所有平台
+            platforms = self.context.platform_manager.get_insts()
+            scanned_groups = 0
+            scanned_members = 0
+
+            for platform in platforms:
+                if platform.platform_name != "aiocqhttp":
+                    continue
+
+                try:
+                    # 获取群列表
+                    from astrbot.api.platform import AiocqhttpAdapter
+                    if isinstance(platform, AiocqhttpAdapter):
+                        client = platform.get_client()
+
+                        # 获取群列表
+                        result = await client.api.call_action('get_group_list')
+                        if result and 'data' in result:
+                            groups = result['data']
+
+                            for group in groups:
+                                group_id = str(group.get('group_id', ''))
+                                if not group_id:
+                                    continue
+
+                                # 扫描群成员
+                                members_result = await client.api.call_action(
+                                    'get_group_member_list',
+                                    group_id=group_id
+                                )
+
+                                if members_result and 'data' in members_result:
+                                    members = members_result['data']
+                                    scanned_groups += 1
+
+                                    for member in members:
+                                        user_id = str(member.get('user_id', ''))
+                                        if not user_id:
+                                            continue
+
+                                        scanned_members += 1
+
+                                        # 更新性别信息
+                                        gender = self._detect_gender_from_info(member)
+                                        if gender:
+                                            self.gender_cache[user_id] = {
+                                                'gender': gender,
+                                                'nickname': member.get('nickname', ''),
+                                                'update_time': asyncio.get_event_loop().time()
+                                            }
+
+                                        # 设置默认称呼
+                                        if user_id not in self.nickname_cache:
+                                            gender = self.gender_cache.get(user_id, {}).get('gender', '未知')
+                                            default_nickname = self._get_default_nickname(gender)
+                                            self.nickname_cache[user_id] = {
+                                                'nicknames': [(default_nickname, 1)],
+                                                'selected': default_nickname
+                                            }
+
+                                        # 更新别名映射
+                                        nickname = member.get('nickname', '')
+                                        card = member.get('card', '')
+                                        if nickname:
+                                            self._update_user_alias(nickname, user_id)
+                                        if card and card != nickname:
+                                            self._update_user_alias(card, user_id)
+
+                except Exception as e:
+                    logger.error(f"扫描群成员时出错: {e}")
+
+            # 记录扫描历史
+            self.scan_history['last_scan'] = {
+                'time': datetime.now().isoformat(),
+                'groups': scanned_groups,
+                'members': scanned_members
+            }
+
+            logger.info(f"每日群成员扫描完成，扫描了 {scanned_groups} 个群，{scanned_members} 个成员")
+
+        except Exception as e:
+            logger.error(f"扫描所有群时出错: {e}")
 
     async def _get_user_info_from_api(self, user_id: str, event: AstrMessageEvent) -> Optional[Dict]:
         """通过API获取用户信息"""
@@ -367,10 +495,25 @@ class GenderDetectorPlugin(Star):
 
         return default
 
+    def _is_at_all(self, event: AstrMessageEvent) -> bool:
+        """检查消息是否包含@全体成员"""
+        for comp in event.message_obj.message:
+            if isinstance(comp, Comp.At):
+                # QQ的@全体成员通常是qq=0或者特殊标记
+                if str(comp.qq) in ['0', 'all', '全体成员']:
+                    return True
+        return False
+
     @filter.on_llm_request()
     async def modify_llm_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
         """在LLM请求时修改prompt添加性别和称呼信息"""
         try:
+            # 检查是否是@全体成员，如果是则不处理
+            if self._is_at_all(event):
+                if self.config.get("debug", False):
+                    logger.info("检测到@全体成员，跳过性别识别处理")
+                return
+
             # 获取发送者信息
             sender_id = event.get_sender_id()
             if not sender_id:
@@ -378,13 +521,14 @@ class GenderDetectorPlugin(Star):
 
             # 收集所有需要处理的用户ID
             all_user_ids = [sender_id]
+            mentioned_users = []
 
             # 检查消息中@的用户
-            mentioned_users = []
             for comp in event.message_obj.message:
                 if isinstance(comp, Comp.At):
                     user_id = str(comp.qq)
-                    if user_id not in all_user_ids:
+                    # 排除@全体成员
+                    if user_id not in ['0', 'all', '全体成员'] and user_id not in all_user_ids:
                         all_user_ids.append(user_id)
                         mentioned_users.append(user_id)
 
@@ -433,21 +577,35 @@ class GenderDetectorPlugin(Star):
 
                 # 构建信息字符串
                 role = "发送者" if user_id == sender_id else "被提及用户"
-                users_info.append(f"{role}: ID={user_id}, 性别={gender}, 称呼={selected_nickname}")
+                info = f"{role}: ID={user_id}, 性别={gender}, 称呼={selected_nickname}"
+
+                # 添加昵称信息（如果有）
+                if user_id in mentioned_users and gender_info.get('nickname'):
+                    info += f", 昵称={gender_info['nickname']}"
+
+                users_info.append(info)
 
             # 修改系统提示
             if users_info:
-                gender_prompt = "\n[对话用户信息]\n"
-                gender_prompt += "\n".join(users_info)
-                gender_prompt += "\n请在回复时根据不同用户使用对应的称呼。"
+                gender_prompt = "\n\n[对话参与者信息]\n"
+                for info in users_info:
+                    gender_prompt += f"- {info}\n"
+                gender_prompt += "\n请根据每个用户的性别和身份使用合适的称呼进行回复。"
 
-                req.system_prompt += gender_prompt
+                # 确保prompt正确添加到系统提示中
+                if hasattr(req, 'system_prompt') and isinstance(req.system_prompt, str):
+                    req.system_prompt = req.system_prompt + gender_prompt
+                else:
+                    # 如果system_prompt不是字符串或不存在，尝试其他方式
+                    logger.warning(f"system_prompt类型异常: {type(req.system_prompt)}")
+                    setattr(req, 'system_prompt', str(getattr(req, 'system_prompt', '')) + gender_prompt)
 
                 if self.config.get("debug", False):
                     logger.info(f"LLM请求已修改 - 涉及用户数: {len(all_user_ids)}")
+                    logger.info(f"添加的性别信息: {gender_prompt}")
 
         except Exception as e:
-            logger.error(f"修改LLM prompt失败: {e}")
+            logger.error(f"修改LLM prompt失败: {e}", exc_info=True)
 
     def _is_cache_expired(self, update_time: float, expire_days: int) -> bool:
         """检查缓存是否过期"""
@@ -459,6 +617,10 @@ class GenderDetectorPlugin(Star):
     async def analyze_nicknames(self, event: AstrMessageEvent):
         """分析消息中的称呼并更新用户信息"""
         if not self.config.get("enable_nickname_learning", True):
+            return
+
+        # 检查是否是@全体成员，如果是则不处理
+        if self._is_at_all(event):
             return
 
         try:
@@ -475,17 +637,25 @@ class GenderDetectorPlugin(Star):
             if len(self.processed_messages) > 1000:
                 self.processed_messages.clear()
 
-            # 收集被@的用户
+            # 收集被@的用户（排除@全体成员）
             mentioned_users = []
             for comp in event.message_obj.message:
                 if isinstance(comp, Comp.At):
-                    mentioned_users.append(str(comp.qq))
+                    user_id = str(comp.qq)
+                    if user_id not in ['0', 'all', '全体成员']:
+                        mentioned_users.append(user_id)
 
             # 提取可能的称呼
             new_nicknames = self._extract_nickname_from_message(message, sender_id, mentioned_users)
 
             # 更新称呼信息
-            for nickname, priority, target_user_id in new_nicknames:
+            for item in new_nicknames:
+                if len(item) == 3:  # 新格式：(nickname, priority, target_user_id)
+                    nickname, priority, target_user_id = item
+                else:  # 兼容旧格式
+                    nickname, priority = item
+                    target_user_id = sender_id
+
                 if target_user_id not in self.nickname_cache:
                     self.nickname_cache[target_user_id] = {
                         'nicknames': [],
@@ -532,6 +702,31 @@ class GenderDetectorPlugin(Star):
             if self.config.get("debug", False):
                 logger.error(f"分析称呼失败: {e}")
 
+    @filter.command("gender_scan", alias={"扫描群成员"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def manual_scan(self, event: AstrMessageEvent):
+        """手动触发群成员扫描（仅管理员）"""
+        try:
+            yield event.plain_result("开始扫描群成员信息，请稍候...")
+
+            await self._scan_all_groups()
+
+            last_scan = self.scan_history.get('last_scan', {})
+            if last_scan:
+                reply = f"✅ 扫描完成！\n"
+                reply += f"📊 扫描统计：\n"
+                reply += f"- 群数量：{last_scan.get('groups', 0)}\n"
+                reply += f"- 成员数量：{last_scan.get('members', 0)}\n"
+                reply += f"- 扫描时间：{last_scan.get('time', '未知')}"
+            else:
+                reply = "扫描完成！"
+
+            yield event.plain_result(reply)
+
+        except Exception as e:
+            logger.error(f"手动扫描失败: {e}")
+            yield event.plain_result("扫描失败，请查看日志")
+
     @filter.command("gender", alias={"性别", "查看性别"})
     async def check_gender(self, event: AstrMessageEvent):
         """查看用户性别信息，支持查看多个用户"""
@@ -539,17 +734,18 @@ class GenderDetectorPlugin(Star):
             # 收集所有需要查询的用户
             target_users = []  # [(user_id, nickname), ...]
 
-            # 检查是否有@其他用户
+            # 检查是否有@其他用户（排除@全体成员）
             has_at = False
             for comp in event.message_obj.message:
                 if isinstance(comp, Comp.At):
-                    has_at = True
                     user_id = str(comp.qq)
-                    user_info = await self._get_user_info_from_api(user_id, event)
-                    nickname = '未知'
-                    if user_info:
-                        nickname = user_info.get('nickname', '') or user_info.get('card', '') or '未知'
-                    target_users.append((user_id, nickname))
+                    if user_id not in ['0', 'all', '全体成员']:
+                        has_at = True
+                        user_info = await self._get_user_info_from_api(user_id, event)
+                        nickname = '未知'
+                        if user_info:
+                            nickname = user_info.get('nickname', '') or user_info.get('card', '') or '未知'
+                        target_users.append((user_id, nickname))
 
             # 如果没有@其他人，则查看发送者自己
             if not has_at:
@@ -615,7 +811,7 @@ class GenderDetectorPlugin(Star):
             # 重新确保默认值
             self._ensure_default_config()
 
-            yield event.plain_result(f"✅ 配置已重载\n当前配置: {dict(self.config)}")
+            yield event.plain_result(f"✅ 配置已重载")
         except Exception as e:
             logger.error(f"重载配置失败: {e}")
             yield event.plain_result("重载失败，请检查日志")
@@ -641,7 +837,14 @@ class GenderDetectorPlugin(Star):
             reply += f"🏷️ 别名映射: {total_alias}\n"
 
             if event.get_group_id() and event.get_group_id() in self.group_members_cache:
-                reply += f"👥 当前群缓存成员: {len(self.group_members_cache[event.get_group_id()])}"
+                reply += f"👥 当前群缓存成员: {len(self.group_members_cache[event.get_group_id()])}\n"
+
+            # 添加最后扫描信息
+            last_scan = self.scan_history.get('last_scan')
+            if last_scan:
+                reply += f"\n📅 最后扫描: {last_scan.get('time', '未知')}\n"
+                reply += f"   扫描群数: {last_scan.get('groups', 0)}\n"
+                reply += f"   扫描成员: {last_scan.get('members', 0)}"
 
             yield event.plain_result(reply)
 
