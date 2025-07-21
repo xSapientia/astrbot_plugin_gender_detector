@@ -1,90 +1,106 @@
-# AstrBot Gender Detector Plugin
+# astrbot_plugin_gender_detector
+一个通过对话和缓存智能识别用户性别，并将其注入LLM提示词的插件。
 
-一个用于识别用户性别并智能缓存用户信息的 AstrBot 插件。
+<div align="center">
 
-## 功能特性
+[![Version](https://img.shields.io/badge/version-v0.0.1-blue.svg)](https://github.com/xSapientia/astrbot_plugin_gender_detector)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D3.4.36-green.svg)](https://github.com/AstrBotDevs/AstrBot)
+[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
-- 🔍 **自动性别识别**：通过 API 自动获取用户性别信息
-- 💾 **智能缓存机制**：缓存用户性别和昵称信息，避免重复调用 API
-- 📝 **昵称智能提取**：从用户消息中智能识别和记录用户的自称昵称
-- 🎯 **优先级管理**：用户自己强调的昵称优先级高于他人的称呼
-- 🔧 **灵活配置**：支持自定义提示词、缓存时长等参数
-- 🐛 **调试模式**：可选的调试信息显示功能
-- 🧹 **自动清理**：插件卸载时自动清理所有相关数据
+一个智能的用户性别识别插件，让您的 AstrBot 能够更好地理解对话上下文，实现更具个性化的回复。
 
-## 安装方法
+</div>
 
-1. 在 AstrBot 管理面板的插件市场搜索 "Gender Detector"
-2. 点击安装按钮
-3. 重启 AstrBot 或重载插件
+## ✨ 功能特性
+- **自动注入提示词**: 在每次LLM请求前，自动将识别出的用户性别（如`[用户身份：男性]`）添加到提示词中。
+- **智能缓存**: 将识别出的用户性别信息进行本地缓存，避免重复识别，提高响应速度。
+- **指令交互**: 提供简单的指令来查询自己或他人的性别，并支持用户主动设置自己的性别。
+- **高度可配置**: 所有提示词、功能开关均可在 AstrBot 管理面板中进行可视化配置。
+- **调试模式**: 内置调试开关，方便管理员查看插件的内部工作状态和缓存信息。
+- **别名支持**: 核心指令支持中文别名，更符合使用习惯。
 
-## 使用方法
 
-### 基础命令
+## 🎯 使用方法
 
-- `/gender` - 查看自己的性别信息
-- `/gender @用户` - 查看指定用户的性别信息
-- `/gender_cache` - 查看缓存统计信息
+### 基础指令
 
-### 配置说明
+| 指令 | 别名 | 说明 | 权限 |
+|------|------|------|------|
+| `/gender` | `性别` | 查看自己的性别信息 | 所有人 |
+| `/gender @用户` | `性别 @用户` | 查看被@用户的性别信息 | 所有人 |
+| `/gender set [male/female]` | `性别 设置 [male/female]` | 设置自己的性别为'male'或'female' | 所有人 |
+
+## ⚙️ 配置说明
+
+插件支持在 AstrBot 管理面板中进行可视化配置：
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| enable_plugin | bool | true | 是否启用插件 |
-| show_debug | bool | false | 是否显示调试信息 |
-| max_nicknames | int | 3 | 每个用户最多缓存的昵称数量 |
-| cache_expire_hours | int | 168 | 缓存有效期（小时） |
-| male_prompt | string | [用户性别: 男性] | 男性用户的提示词 |
-| female_prompt | string | [用户性别: 女性] | 女性用户的提示词 |
-| unknown_prompt | string | [用户性别: 未知] | 性别未知用户的提示词 |
-| prompt_position | string | prefix | 提示词插入位置 (prefix/suffix) |
+| `enable_plugin` | bool | true | 插件总开关。 |
+| `enable_debug` | bool | false | 调试模式开关。开启后`/gender`指令会返回更详细的缓存信息。 |
+| `max_nickname_cache` | int | 3 | （为未来功能保留）每个用户可缓存的昵称上限。 |
+| `prompt_position` | string | prefix | 性别提示词注入位置，可选`prefix`（前置）或`suffix`（后置）。 |
+| `male_prompt` | text | `[用户身份：男性]` | 识别用户为男性时，注入的提示词内容。 |
+| `female_prompt` | text | `[用户身份：女性]` | 识别用户为女性时，注入的提示词内容。 |
+| `unknown_prompt`| text | `[用户身份：未知]` | 无法识别性别时，注入的提示词内容。 |
 
-## 工作原理
+## 💾 数据存储
 
-1. **性别检测**：
-   - 首先尝试从缓存读取
-   - 缓存过期或不存在时，调用平台 API 获取用户信息
-   - 从 API 返回的性别字段获取性别
-   - 如果 API 未返回性别，尝试从昵称推测
+插件数据和配置保存在AstrBot的`data`目录下，以确保插件更新时数据不丢失：
+- **缓存数据**: `data/plugin_data/astrbot_plugin_gender_detector/gender_cache.json`
+- **插件配置**: `data/config/astrbot_plugin_gender_detector_config.json`
 
-2. **昵称识别**：
-   - 监听所有消息，识别自我介绍模式
-   - 支持多种自我介绍格式（"我叫XX"、"叫我XX"等）
-   - 记录昵称来源（self/others）和使用频率
-   - 自动排序并保留最常用的昵称
+## 🔧 工作原理
 
-3. **LLM 集成**：
-   - 在 LLM 请求时自动注入用户性别信息
-   - 可选添加用户常用昵称
-   - 支持在 prompt 前后插入信息
+1.  当用户发送消息给LLM时，插件会触发`on_llm_request`钩子。
+2.  插件首先检查本地缓存中是否存在该用户的性别信息。
+3.  如果缓存中不存在，插件会进行一个模拟的“性别识别”过程（**注意：v0.0.1版本中，此过程仅为占位符，默认返回“未知”。用户需要通过`/gender set`指令主动设置**）。
+4.  获取到性别后，插件根据配置将对应的提示词（如`[用户身份：女性]`）添加到原始用户消息的前面或后面。
+5.  最后，将修改后的完整请求发送给LLM。
 
-## 数据存储
+## 🐛 故障排除 & FAQ
 
-插件数据保存在以下位置：
-- 缓存数据：`data/plugin_data/astrbot_plugin_gender_detector/gender_cache.json`
-- 插件配置：`data/config/astrbot_plugin_gender_detector_config.json`
+**Q: 为什么插件总是识别我的性别为“未知”？**
+A: 这是设计的初始行为。v0.0.1版本不包含主动的性别分析功能。您需要通过指令 `/gender set male` 或 `/gender set female` 来主动设置一次您的性别，之后插件就会记住。
 
-**注意**：插件卸载时会自动清理所有相关文件和目录。
+**Q: 插件无响应怎么办？**
+1.  前往AstrBot管理面板，检查“插件管理”中本插件是否已启用。
+2.  确认指令格式是否正确，例如 `/gender` 或 `/gender @张三`。
+3.  查看AstrBot后台日志，确认是否有与 `astrbot_plugin_gender_detector` 相关的错误信息。
 
-## 注意事项
+**Q: 我可以自己实现更高级的性别识别逻辑吗？**
+A: 当然可以。您可以在`main.py`的`_get_user_gender_info`函数中，替换“模拟API调用/分析”部分的代码。例如，您可以调用一个外部的NLP API，或者编写一套基于用户历史发言的规则。
 
-- 本插件需要平台支持获取用户信息的 API（如 QQ 平台的 get_group_member_info）
-- 性别推测功能基于简单的关键词匹配，可能不够准确
-- 插件会定期（每小时）自动清理过期缓存
+## 📝 更新日志
 
-## 更新日志
+### v0.0.1 (开发中)
+- ✅ 实现插件基础框架。
+- ✅ 支持通过指令查询和设置性别。
+- ✅ 实现性别信息本地化缓存。
+- ✅ 实现LLM请求提示词注入功能。
+- ✅ 添加完整的可视化配置项和调试模式。
 
-### v0.0.1 (2025-01-21)
-- 初始版本发布
-- 实现基础的性别识别和缓存功能
-- 支持昵称智能提取
-- 集成 LLM prompt 修改功能
-- 完善数据存储和清理机制
+## 🤝 贡献
 
-## 问题反馈
+欢迎通过提交 Issue 和 Pull Request 来为本项目做出贡献！
 
-如有问题或建议，请在 GitHub 仓库提交 Issue。
+## 📄 许可证
 
-## 许可证
+本项目采用 MIT 许可证 - 详见 `LICENSE` 文件。
 
-MIT License
+## 👨‍💻 作者
+
+- **xSapientia** - *Initial work* - [GitHub](https://github.com/xSapientia)
+
+## 🙏 致谢
+
+- 感谢 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 项目提供的优秀插件框架。
+- 感谢所有为开源社区做出贡献的开发者。
+
+---
+
+<div align="center">
+
+如果这个插件对你有帮助，请在GitHub上给个 ⭐ Star！
+
+</div>
