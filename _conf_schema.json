@@ -1,41 +1,68 @@
 {
   "enable_plugin": {
-    "description": "启用/禁用此插件",
+    "description": "启用插件",
     "type": "bool",
     "default": true
   },
-  "enable_debug_log": {
-    "description": "启用详细的调试日志输出。开启后，插件的每一步操作（如缓存命中、API调用）都会记录在日志中，方便排查问题。",
+  "enable_debug": {
+    "description": "启用调试模式",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "启用后可查看详细日志和使用调试命令"
   },
   "male_prompt": {
-    "description": "检测到用户为男性时，添加到提示词的内容。",
+    "description": "男性用户提示词",
     "type": "string",
-    "default": "[男性用户]"
+    "default": "[用户性别:男性] 对方是一位男性用户",
+    "hint": "识别为男性时插入的提示词"
   },
   "female_prompt": {
-    "description": "检测到用户为女性时，添加到提示词的内容。",
+    "description": "女性用户提示词",
     "type": "string",
-    "default": "[女性用户]"
+    "default": "[用户性别:女性] 对方是一位女性用户",
+    "hint": "识别为女性时插入的提示词"
   },
   "unknown_prompt": {
-    "description": "无法检测到用户性别时，添加到提示词的内容。",
+    "description": "未知性别提示词",
     "type": "string",
-    "default": "[性别未知]"
+    "default": "[用户性别:未知] 对方性别未知",
+    "hint": "无法识别性别时插入的提示词"
   },
   "prompt_position": {
-    "description": "将性别提示词添加到原始提示词的前面还是后面。",
+    "description": "提示词插入位置",
     "type": "string",
     "default": "prefix",
-    "options": [
-      "prefix",
-      "suffix"
-    ]
+    "options": ["prefix", "suffix"],
+    "hint": "prefix=在用户消息前插入，suffix=在用户消息后插入"
   },
-  "cache_duration": {
-    "description": "性别信息缓存的有效时间（秒）。这可以避免频繁调用平台API。设置为0则禁用缓存。",
+  "cache_expire_hours": {
+    "description": "缓存过期时间(小时)",
     "type": "int",
-    "default": 3600
+    "default": 24,
+    "hint": "性别信息缓存的有效期"
+  },
+  "enable_honorific": {
+    "description": "启用敬语称呼",
+    "type": "bool",
+    "default": true,
+    "hint": "是否在提示词中加入敬语称呼"
+  },
+  "male_honorific": {
+    "description": "男性敬语",
+    "type": "string",
+    "default": "先生",
+    "hint": "称呼男性用户时使用的敬语"
+  },
+  "female_honorific": {
+    "description": "女性敬语",
+    "type": "string",
+    "default": "女士",
+    "hint": "称呼女性用户时使用的敬语"
+  },
+  "unknown_honorific": {
+    "description": "未知性别敬语",
+    "type": "string",
+    "default": "朋友",
+    "hint": "性别未知时使用的称呼"
   }
 }
