@@ -1,355 +1,368 @@
-import asyncio
-import json
 import os
-import datetime
-from typing import Dict, Any, Optional, List
+import json
+import asyncio
+import re
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Set, Any
+from pathlib import Path
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
+from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
-from astrbot.api.provider import ProviderRequest
 from astrbot.api import logger, AstrBotConfig
+from astrbot.api.provider import ProviderRequest
 import astrbot.api.message_components as Comp
 
 @register(
     "astrbot_plugin_gender_detector",
     "xSapientia",
-    "深度用户洞察插件，缓存用户信息并注入LLM上下文。",
-    "v0.0.1",
+    "智能识别用户性别并自动添加到LLM提示词的插件",
+    "0.0.1",
     "https://github.com/xSapientia/astrbot_plugin_gender_detector"
 )
-class UserInsightsPlugin(Star):
+class GenderDetectorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.context = context
-        self.cache_file = os.path.join(self.get_plugin_data_path(), "user_cache.json")
-        self.user_cache = self._load_cache()
-        self.scan_task = None
+        self.plugin_data_dir = Path("data/plugin_data/astrbot_plugin_gender_detector")
+        self.plugin_data_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.config.get("enable_daily_scan", True):
-            self.scan_task = asyncio.create_task(self._scheduled_scanner())
+        # 缓存文件路径
+        self.user_cache_file = self.plugin_data_dir / "user_cache.json"
+        self.user_cache: Dict[str, Dict] = self._load_cache()
 
-    def _debug_log(self, message: str):
-        if self.config.get("show_debug_log", False):
-            logger.info(f"[UserInsights Debug] {message}")
+        # 启动每日扫描任务
+        if self.config.get("scan_settings", {}).get("enable_daily_scan", True):
+            asyncio.create_task(self._daily_scan_task())
 
-    # region Cache Management
-    def _load_cache(self) -> Dict[str, Any]:
-        if os.path.exists(self.cache_file):
+        logger.info("astrbot_plugin_gender_detector 插件已加载")
+
+    def _load_cache(self) -> Dict:
+        """加载缓存文件"""
+        if self.user_cache_file.exists():
             try:
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
+                with open(self.user_cache_file, 'r', encoding='utf-8') as f:
                     return json.load(f)
-            except json.JSONDecodeError:
-                logger.warning(f"无法解析缓存文件 {self.cache_file}，将初始化为空。")
+            except Exception as e:
+                logger.error(f"加载缓存失败: {e}")
         return {}
 
     def _save_cache(self):
-        os.makedirs(os.path.dirname(self.cache_file), exist_ok=True)
+        """保存缓存文件"""
         try:
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
+            with open(self.user_cache_file, 'w', encoding='utf-8') as f:
                 json.dump(self.user_cache, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            logger.error(f"保存缓存文件失败: {e}")
+            logger.error(f"保存缓存失败: {e}")
 
-    def _get_cached_user(self, uid: str) -> Optional[Dict[str, Any]]:
-        user_data = self.user_cache.get(uid)
-        if not user_data:
-            return None
-
-        expiry_hours = self.config.get("cache_expiry_hours", 72)
-        last_updated = datetime.datetime.fromisoformat(user_data.get("last_updated"))
-        if datetime.datetime.now() - last_updated > datetime.timedelta(hours=expiry_hours):
-            self._debug_log(f"用户 {uid} 缓存已过期。")
-            return None
-
-        return user_data
-
-    def _update_cache(self, uid: str, data: Dict[str, Any]):
-        data["last_updated"] = datetime.datetime.now().isoformat()
-        self.user_cache[uid] = data
-        self._save_cache()
-    # endregion
-
-    # region Platform Specific Info Fetching
-    async def _fetch_user_info(self, platform_name: str, bot: Any, user_id: str, group_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """尝试从平台API获取用户信息 (主要支持 aiocqhttp)"""
-        if platform_name != "aiocqhttp":
-            return None
-
+    def _is_cache_valid(self, cache_time: str) -> bool:
+        """检查缓存是否有效"""
         try:
-            if group_id:
-                # 获取群成员信息
-                payloads = {"group_id": int(group_id), "user_id": int(user_id), "no_cache": True}
-                info = await bot.api.call_action('get_group_member_info', **payloads)
-            else:
-                # 获取陌生人/好友信息
-                payloads = {"user_id": int(user_id), "no_cache": True}
-                info = await bot.api.call_action('get_stranger_info', **payloads)
+            cache_datetime = datetime.fromisoformat(cache_time)
+            valid_days = self.config.get("cache_settings", {}).get("cache_valid_days", 7)
+            return datetime.now() - cache_datetime < timedelta(days=valid_days)
+        except:
+            return False
 
-            if info and info.get('retcode') == 0:
-                data = info.get('data', {})
-                return self._normalize_qq_info(data)
-        except Exception as e:
-            self._debug_log(f"获取用户信息失败 (UID: {user_id}, GID: {group_id}): {e}")
-        return None
+    async def _get_user_info(self, event: AstrMessageEvent, user_id: str) -> Optional[Dict]:
+        """获取用户信息"""
+        # 先检查缓存
+        if user_id in self.user_cache:
+            cache_data = self.user_cache[user_id]
+            if self._is_cache_valid(cache_data.get("cache_time", "")):
+                if self.config.get("debug_settings", {}).get("show_debug", False):
+                    logger.debug(f"从缓存获取用户信息: {user_id}")
+                return cache_data
 
-    def _normalize_qq_info(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """标准化QQ信息结构"""
-        return {
-            "nickname": data.get("nickname"),
-            "sex": data.get("sex"),  # male, female, unknown
-            "age": data.get("age"),
-            "title": data.get("title"), # 群头衔
-            "card": data.get("card") or data.get("nickname"), # 群名片
-            # QQ API不直接提供生日，这里留空或使用其他方式推断
-            "birthday": None,
-        }
-    # endregion
-
-    # region Core Logic
-    async def get_user_info(self, event: AstrMessageEvent, user_id: str) -> Dict[str, Any]:
-        """获取用户信息，优先缓存，缓存失效则尝试更新"""
-        uid = f"{event.get_platform_name()}:{user_id}"
-
-        # 功能4: 优先更新缓存数据 (如果缓存过期)
-        cached_data = self._get_cached_user(uid)
-        if cached_data:
-            return cached_data
-
-        # 尝试从平台获取
+        # 根据平台获取用户信息
         platform_name = event.get_platform_name()
-        bot = getattr(event, 'bot', None) or getattr(event, 'client', None) # 兼容不同平台的bot/client属性
+        user_info = None
 
-        if bot:
-            group_id = event.get_group_id()
-            fetched_data = await self._fetch_user_info(platform_name, bot, user_id, group_id)
-            if fetched_data:
-                # 功能2 (简化): 整理默认称呼
-                nicknames = []
-                if fetched_data.get("title"):
-                    nicknames.append(fetched_data.get("title"))
-                if fetched_data.get("card") and fetched_data.get("card") not in nicknames:
-                    nicknames.append(fetched_data.get("card"))
-                if fetched_data.get("nickname") and fetched_data.get("nickname") not in nicknames:
-                     nicknames.append(fetched_data.get("nickname"))
+        if platform_name == "aiocqhttp":
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if isinstance(event, AiocqhttpMessageEvent):
+                try:
+                    # 获取用户信息
+                    ret = await event.bot.api.call_action('get_stranger_info', user_id=int(user_id))
+                    if ret and ret.get("status") == "ok":
+                        data = ret.get("data", {})
+                        user_info = {
+                            "user_id": user_id,
+                            "nickname": data.get("nickname", ""),
+                            "age": data.get("age", 0),
+                            "sex": data.get("sex", "unknown"),
+                            "birthday": self._parse_birthday(data.get("age", 0)),
+                            "cache_time": datetime.now().isoformat()
+                        }
 
-                fetched_data["nicknames"] = nicknames[:self.config.get("nickname_cache_limit", 5)]
+                        # 如果是群消息，获取群信息
+                        if event.get_group_id():
+                            group_ret = await event.bot.api.call_action(
+                                'get_group_member_info',
+                                group_id=int(event.get_group_id()),
+                                user_id=int(user_id)
+                            )
+                            if group_ret and group_ret.get("status") == "ok":
+                                group_data = group_ret.get("data", {})
+                                user_info.update({
+                                    "card": group_data.get("card", ""),
+                                    "title": group_data.get("title", "")
+                                })
+                except Exception as e:
+                    logger.error(f"获取用户信息失败: {e}")
 
-                self._update_cache(uid, fetched_data)
-                return fetched_data
+        # 更新缓存
+        if user_info:
+            self.user_cache[user_id] = user_info
+            self._save_cache()
 
-        # 无法获取或平台不支持
-        return {"nickname": event.get_sender_name() if user_id == event.get_sender_id() else "未知用户", "sex": "unknown", "age": 0, "nicknames": []}
+        return user_info
 
-    def _format_user_context(self, user_data: Dict[str, Any]) -> str:
-        """格式化用户信息为注入的上下文"""
-        nickname = user_data.get('nickname', '未知')
-        sex = user_data.get('sex', '未知')
-        age = user_data.get('age', '未知')
-        title = user_data.get('title', '无')
-        card = user_data.get('card', nickname)
+    def _parse_birthday(self, age: int) -> str:
+        """根据年龄推算生日年份"""
+        if age > 0:
+            birth_year = datetime.now().year - age
+            return f"{birth_year}年"
+        return "未知"
 
-        return f"[用户: {nickname} (群名片:{card}, 头衔:{title}, 性别:{sex}, 年龄:{age})]"
+    async def _scan_group_members(self, event: AstrMessageEvent, group_id: str):
+        """扫描群成员信息"""
+        platform_name = event.get_platform_name()
 
-    # 功能3: 在LLM请求时修改prompt内容
-    @filter.on_llm_request()
-    async def inject_user_context(self, event: AstrMessageEvent, req: ProviderRequest):
-        if not self.config.get("enable_injection", True):
+        if platform_name == "aiocqhttp":
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            if isinstance(event, AiocqhttpMessageEvent):
+                try:
+                    ret = await event.bot.api.call_action('get_group_member_list', group_id=int(group_id))
+                    if ret and ret.get("status") == "ok":
+                        members = ret.get("data", [])
+                        for member in members:
+                            user_id = str(member.get("user_id"))
+                            user_info = {
+                                "user_id": user_id,
+                                "nickname": member.get("nickname", ""),
+                                "card": member.get("card", ""),
+                                "title": member.get("title", ""),
+                                "age": member.get("age", 0),
+                                "sex": member.get("sex", "unknown"),
+                                "birthday": self._parse_birthday(member.get("age", 0)),
+                                "cache_time": datetime.now().isoformat()
+                            }
+                            self.user_cache[user_id] = user_info
+
+                        self._save_cache()
+                        logger.info(f"群 {group_id} 成员扫描完成，共扫描 {len(members)} 人")
+                except Exception as e:
+                    logger.error(f"扫描群成员失败: {e}")
+
+    async def _analyze_history_messages(self, event: AstrMessageEvent):
+        """分析历史消息识别称呼"""
+        # 获取当前会话的历史对话
+        uid = event.unified_msg_origin
+        curr_cid = await self.context.conversation_manager.get_curr_conversation_id(uid)
+
+        if not curr_cid:
             return
 
-        self._debug_log("开始注入用户上下文...")
-        involved_users = set()
-        context_injection = ""
+        conversation = await self.context.conversation_manager.get_conversation(uid, curr_cid)
+        if not conversation:
+            return
 
-        # 1. 处理发送者
+        try:
+            history = json.loads(conversation.history)
+            history_count = self.config.get("history_settings", {}).get("history_count", 100)
+
+            # 分析最近的历史消息
+            for msg in history[-history_count:]:
+                content = msg.get("content", "")
+                # 识别@和称呼
+                self._extract_nicknames(content)
+
+        except Exception as e:
+            logger.error(f"分析历史消息失败: {e}")
+
+    def _extract_nicknames(self, content: str):
+        """从内容中提取称呼"""
+        # 提取@的用户
+        at_pattern = r'@(\S+)'
+        at_matches = re.findall(at_pattern, content)
+
+        # TODO: 这里可以添加更复杂的称呼识别逻辑
+        # 比如通过NLP识别"小明说"、"告诉小红"等模式
+
+        for nickname in at_matches:
+            # 更新到缓存中的nicknames字段
+            pass
+
+    def _get_sex_text(self, sex: str) -> str:
+        """转换性别文本"""
+        sex_map = {
+            "male": "男",
+            "female": "女",
+            "unknown": "未知"
+        }
+        return sex_map.get(sex, "未知")
+
+    async def _inject_user_info_to_prompt(self, event: AstrMessageEvent, req: ProviderRequest):
+        """注入用户信息到提示词"""
+        if not self.config.get("prompt_settings", {}).get("enable_prompt_inject", True):
+            return
+
+        # 获取发送者信息
         sender_id = event.get_sender_id()
-        involved_users.add(sender_id)
-        sender_info = await self.get_user_info(event, sender_id)
-        context_injection += f"消息发送者信息: {self._format_user_context(sender_info)}\n"
+        sender_info = await self._get_user_info(event, sender_id)
 
-        # 2. 处理@提及的用户
-        for component in event.message_obj.message:
-            if isinstance(component, Comp.At):
-                at_user_id = str(component.qq) # qq属性通常用于存储目标ID
-                if at_user_id and at_user_id != sender_id:
-                    involved_users.add(at_user_id)
-                    at_user_info = await self.get_user_info(event, at_user_id)
-                    context_injection += f"被提及用户(@)信息: {self._format_user_context(at_user_info)}\n"
+        inject_parts = []
 
-        # 3. (功能2简化实现) 尝试识别文本中的称呼 (此处实现较为复杂，依赖NLP，简化为仅依赖缓存的昵称匹配)
-        # 注意：这部分实现非常基础，准确率有限
-        message_text = event.message_str.lower()
-        for uid_key, user_data in self.user_cache.items():
-            platform, user_id = uid_key.split(':', 1)
-            if user_id in involved_users or platform != event.get_platform_name():
-                continue
+        # 统计涉及的用户
+        if self.config.get("prompt_settings", {}).get("insert_user_count", True):
+            # 分析消息中的@和称呼
+            message_str = event.message_str
+            mentioned_users = set()
 
-            for nickname in user_data.get("nicknames", []):
-                if nickname.lower() in message_text:
-                    involved_users.add(user_id)
-                    context_injection += f"消息中提到的用户({nickname})信息: {self._format_user_context(user_data)}\n"
-                    break # 找到一个昵称就停止，避免重复添加
+            # 查找@
+            at_pattern = r'@(\S+)'
+            at_matches = re.findall(at_pattern, message_str)
+            mentioned_users.update(at_matches)
 
-        # 注入信息
-        user_count = len(involved_users)
-        final_injection = f"【本次对话上下文信息】\n(涉及用户数: {user_count})\n{context_injection}【上下文信息结束】\n\n"
+            if mentioned_users:
+                inject_parts.append(f"[本次对话涉及 {len(mentioned_users) + 1} 位用户]")
 
-        if req.system_prompt:
-            req.system_prompt = final_injection + req.system_prompt
-        else:
-            req.system_prompt = final_injection
+        # 插入发送者信息
+        if self.config.get("prompt_settings", {}).get("insert_sender_info", True) and sender_info:
+            sender_desc = f"[发送者: {sender_info.get('nickname', '未知')}({sender_id})"
+            if sender_info.get('title'):
+                sender_desc += f", 头衔: {sender_info['title']}"
+            if sender_info.get('card'):
+                sender_desc += f", 群名片: {sender_info['card']}"
+            sender_desc += f", 性别: {self._get_sex_text(sender_info.get('sex', 'unknown'))}"
+            if sender_info.get('age', 0) > 0:
+                sender_desc += f", 年龄: {sender_info['age']}"
+            sender_desc += "]"
+            inject_parts.append(sender_desc)
 
-        self._debug_log(f"注入完成。涉及用户数: {user_count}")
+        # 注入到system_prompt前面
+        if inject_parts:
+            prefix = "\n".join(inject_parts) + "\n\n"
+            req.system_prompt = prefix + req.system_prompt
 
-    # endregion
+            if self.config.get("debug_settings", {}).get("show_debug", False):
+                logger.debug(f"注入用户信息: {prefix}")
 
-    # region Commands and Scanning
-
-    # 功能1: 每日扫描
-    async def _scheduled_scanner(self):
+    async def _daily_scan_task(self):
+        """每日扫描任务"""
         while True:
-            now = datetime.datetime.now()
-            scan_time_str = self.config.get("daily_scan_time", "03:00")
             try:
-                scan_hour, scan_minute = map(int, scan_time_str.split(':'))
-                target_time = now.replace(hour=scan_hour, minute=scan_minute, second=0, microsecond=0)
-            except ValueError:
-                logger.error(f"每日扫描时间配置错误: {scan_time_str}。使用默认值 03:00。")
-                target_time = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                # 获取配置的扫描时间
+                scan_time = self.config.get("scan_settings", {}).get("scan_time", "03:00")
+                hour, minute = map(int, scan_time.split(":"))
 
-            if now > target_time:
-                target_time += datetime.timedelta(days=1)
+                # 计算下次扫描时间
+                now = datetime.now()
+                next_scan = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
-            wait_seconds = (target_time - now).total_seconds()
-            self._debug_log(f"下一次扫描将在 {wait_seconds:.0f} 秒后执行 ({target_time})")
-            await asyncio.sleep(wait_seconds)
+                if next_scan <= now:
+                    next_scan += timedelta(days=1)
 
-            if self.config.get("enable_daily_scan", True):
-                logger.info("开始执行每日群组扫描...")
-                await self.scan_all_groups()
+                wait_seconds = (next_scan - now).total_seconds()
+                await asyncio.sleep(wait_seconds)
 
-            # 确保任务在下一次循环前稍微等待，避免时间计算误差导致的重复执行
-            await asyncio.sleep(60)
+                # 执行扫描
+                logger.info("开始执行每日群成员扫描")
+                # TODO: 获取所有已加入的群并扫描
 
-    async def scan_all_groups(self):
-        # 获取所有加载的平台
-        platforms = self.context.platform_manager.get_insts()
-        for platform in platforms:
-            if platform.platform_metadata.name == "aiocqhttp":
-                await self._scan_aiocqhttp_groups(platform)
+            except Exception as e:
+                logger.error(f"每日扫描任务出错: {e}")
+                await asyncio.sleep(3600)  # 出错后等待1小时
 
-    async def _scan_aiocqhttp_groups(self, platform):
-        try:
-            # 假设平台实例有client属性
-            client = getattr(platform, 'client', None)
-            if not client:
-                return
-
-            # 获取群列表
-            group_list_resp = await client.api.call_action('get_group_list')
-            if group_list_resp and group_list_resp.get('retcode') == 0:
-                groups = group_list_resp.get('data', [])
-                self._debug_log(f"找到 {len(groups)} 个群组。")
-
-                for group in groups:
-                    group_id = str(group.get('group_id'))
-                    await self._scan_group_members(client, group_id)
-                    await asyncio.sleep(5) # 避免API调用过快
-            else:
-                self._debug_log("获取群列表失败。")
-        except Exception as e:
-            logger.error(f"扫描 aiocqhttp 群组时出错: {e}")
-
-    async def _scan_group_members(self, client, group_id: str):
-        try:
-            member_list_resp = await client.api.call_action('get_group_member_list', group_id=int(group_id))
-            if member_list_resp and member_list_resp.get('retcode') == 0:
-                members = member_list_resp.get('data', [])
-                self._debug_log(f"群 {group_id} 找到 {len(members)} 个成员。")
-
-                for member in members:
-                    user_id = str(member.get('user_id'))
-                    uid = f"aiocqhttp:{user_id}"
-                    normalized_info = self._normalize_qq_info(member)
-
-                    # 更新缓存逻辑 (简化，只更新基础信息，不处理复杂昵称优先级)
-                    nicknames = []
-                    if normalized_info.get("title"):
-                        nicknames.append(normalized_info.get("title"))
-                    if normalized_info.get("card") and normalized_info.get("card") not in nicknames:
-                        nicknames.append(normalized_info.get("card"))
-                    if normalized_info.get("nickname") and normalized_info.get("nickname") not in nicknames:
-                        nicknames.append(normalized_info.get("nickname"))
-
-                    normalized_info["nicknames"] = nicknames[:self.config.get("nickname_cache_limit", 5)]
-                    self._update_cache(uid, normalized_info)
-
-                self._debug_log(f"群 {group_id} 缓存更新完成。")
-        except Exception as e:
-            logger.error(f"扫描群成员失败 (GID: {group_id}): {e}")
-
-    # 要求2: 指令
-    @filter.command("gender_scan", alias={"gscan"})
-    @filter.permission_type(filter.PermissionType.ADMIN) # 限制管理员使用
-    async def cmd_gscan(self, event: AstrMessageEvent):
-        '''主动调用群聊扫描功能 (仅管理员)'''
-        yield event.plain_result("开始手动扫描所有群组，请查看日志了解进度...")
-        await self.scan_all_groups()
-        yield event.plain_result("手动群组扫描完成。")
-
-    @filter.command("gender")
+    @filter.command("gender", alias={"性别"})
     async def cmd_gender(self, event: AstrMessageEvent):
-        '''查看自己或@提及的用户的性别'''
-        target_id = None
+        """查看用户性别信息"""
+        # 检查消息中是否有@
+        target_users = []
 
-        # 检查是否有@
-        for component in event.message_obj.message:
-            if isinstance(component, Comp.At):
-                target_id = str(component.qq)
-                break
+        # 查找@的用户
+        for comp in event.message_obj.message:
+            if isinstance(comp, Comp.At):
+                target_users.append(str(comp.qq))
 
-        if not target_id:
-            target_id = event.get_sender_id()
+        # 如果没有@，则查看发送者自己
+        if not target_users:
+            target_users.append(event.get_sender_id())
 
-        user_info = await self.get_user_info(event, target_id)
+        results = []
+        for user_id in target_users:
+            user_info = await self._get_user_info(event, user_id)
+            if user_info:
+                sex_text = self._get_sex_text(user_info.get("sex", "unknown"))
+                result = f"{user_info.get('nickname', '未知')}({user_id}): {sex_text}"
+                if user_info.get("age", 0) > 0:
+                    result += f", {user_info['age']}岁"
+                results.append(result)
+            else:
+                results.append(f"用户({user_id}): 信息获取失败")
 
-        sex = user_info.get("sex", "unknown")
-        nickname = user_info.get("nickname", "未知用户")
+        yield event.plain_result("\n".join(results))
 
-        if sex == "male":
-            sex_str = "男性"
-        elif sex == "female":
-            sex_str = "女性"
-        else:
-            sex_str = "未知 (可能是平台不支持或用户未设置)"
+    @filter.command("gender_scan", alias={"gscan", "群扫描"})
+    async def cmd_scan(self, event: AstrMessageEvent):
+        """主动扫描群成员"""
+        group_id = event.get_group_id()
+        if not group_id:
+            yield event.plain_result("该指令仅在群聊中可用")
+            return
 
-        yield event.plain_result(f"用户 {nickname} (ID: {target_id}) 的性别是: {sex_str}")
+        yield event.plain_result("开始扫描群成员信息...")
 
-    # endregion
+        await self._scan_group_members(event, group_id)
 
-    # 要求1: 卸载处理
+        # 统计性别信息
+        male_count = 0
+        female_count = 0
+        unknown_count = 0
+
+        for user_data in self.user_cache.values():
+            sex = user_data.get("sex", "unknown")
+            if sex == "male":
+                male_count += 1
+            elif sex == "female":
+                female_count += 1
+            else:
+                unknown_count += 1
+
+        stats = f"扫描完成！统计信息:\n男性: {male_count} 人\n女性: {female_count} 人\n未知: {unknown_count} 人"
+        yield event.plain_result(stats)
+
+    @filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
+        """在LLM请求时注入用户信息"""
+        await self._inject_user_info_to_prompt(event, req)
+
+    @filter.on_astrbot_loaded()
+    async def on_loaded(self):
+        """AstrBot加载完成时"""
+        logger.info("GenderDetector: AstrBot已加载完成")
+
     async def terminate(self):
-        '''插件卸载/停用时的清理工作'''
-        logger.info("astrbot_plugin_user_insights 正在卸载...")
-
-        # 停止定时任务
-        if self.scan_task:
-            self.scan_task.cancel()
-            self._debug_log("已停止每日扫描任务。")
-
+        """插件卸载时的清理工作"""
         # 保存缓存
         self._save_cache()
-        self._debug_log("已保存用户缓存。")
 
-        # 数据清理
-        if self.config.get("delete_data_on_uninstall", False):
-            if os.path.exists(self.cache_file):
-                os.remove(self.cache_file)
-                logger.info(f"已删除缓存文件: {self.cache_file}")
+        # 根据配置决定是否删除数据
+        if self.config.get("cleanup_settings", {}).get("delete_plugin_data", False):
+            try:
+                import shutil
+                shutil.rmtree(self.plugin_data_dir)
+                logger.info("已删除插件数据目录")
+            except Exception as e:
+                logger.error(f"删除插件数据失败: {e}")
 
-        # 配置清理 (AstrBotConfig 提供了获取配置文件路径的方法)
-        if self.config.get("delete_config_on_uninstall", False):
-            config_path = self.config.config_path
-            if config_path and os.path.exists(config_path):
-                os.remove(config_path)
-                logger.info(f"已删除配置文件: {config_path}")
+        if self.config.get("cleanup_settings", {}).get("delete_config", False):
+            try:
+                config_file = Path(f"data/config/astrbot_plugin_gender_detector_config.json")
+                if config_file.exists():
+                    config_file.unlink()
+                    logger.info("已删除插件配置文件")
+            except Exception as e:
+                logger.error(f"删除配置文件失败: {e}")
+
+        logger.info("astrbot_plugin_gender_detector 插件已卸载")
