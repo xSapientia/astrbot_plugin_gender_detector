@@ -55,17 +55,17 @@
       "male": {
         "description": "男性默认称呼",
         "type": "string",
-        "default": "哥哥"
+        "default": "小哥哥"
       },
       "female": {
         "description": "女性默认称呼",
         "type": "string",
-        "default": "姐姐"
+        "default": "小姐姐"
       },
       "unknown": {
         "description": "未知性别默认称呼",
         "type": "string",
-        "default": ""
+        "default": "朋友"
       }
     }
   }
