@@ -1,0 +1,36 @@
+{
+  "enable_plugin": {
+    "description": "启用/禁用此插件",
+    "type": "bool",
+    "default": true
+  },
+  "male_prompt": {
+    "description": "检测到用户为男性时，添加到提示词的内容。",
+    "type": "string",
+    "default": "[男性用户]"
+  },
+  "female_prompt": {
+    "description": "检测到用户为女性时，添加到提示词的内容。",
+    "type": "string",
+    "default": "[女性用户]"
+  },
+  "unknown_prompt": {
+    "description": "无法检测到用户性别时，添加到提示词的内容。",
+    "type": "string",
+    "default": "[性别未知]"
+  },
+  "prompt_position": {
+    "description": "将性别提示词添加到原始提示词的前面还是后面。",
+    "type": "string",
+    "default": "prefix",
+    "options": [
+      "prefix",
+      "suffix"
+    ]
+  },
+  "cache_duration": {
+    "description": "性别信息缓存的有效时间（秒）。这可以避免频繁调用平台API。设置为0则禁用缓存。",
+    "type": "int",
+    "default": 3600
+  }
+}
