@@ -69,3 +69,95 @@
 
 ### LLM增强
 在每次LLM请求时，插件会自动注入用户信息：
+```
+[用户信息: 张三(先生), 男性]
+```
+
+## 💾 数据存储
+
+插件数据保存在以下位置：
+- 性别缓存：`data/plugin_data/astrbot_plugin_gender_detector/gender_cache.json`
+- 称呼缓存：`data/plugin_data/astrbot_plugin_gender_detector/address_cache.json`
+- 插件配置：`data/config/astrbot_plugin_gender_detector_config.json`
+
+## 🔧 高级特性
+
+### 智能称呼学习
+- 插件会从对话中自动学习和更新用户的称呼偏好
+- 支持同时缓存多个称呼，自动选择优先级最高的使用
+
+### 缓存管理
+- 自动清理过期缓存
+- 限制每个用户的称呼缓存数量，防止存储膨胀
+
+### 调试支持
+- 完整的调试日志输出
+- 管理员专用的调试命令
+
+## 🐛 故障排除
+
+### 性别识别不准确
+1. 检查用户昵称是否包含性别特征
+2. 可以通过API扩展来获取更准确的性别信息
+
+### 称呼没有被记录
+1. 确认 `auto_detect_from_history` 配置已开启
+2. 检查消息是否符合识别模式
+3. 查看调试日志了解详细信息
+
+## 📝 更新日志
+
+### v0.0.1 (2024-12-26)
+- ✅ 实现基础的性别识别功能
+- ✅ 添加多级称呼优先级系统
+- ✅ 支持从历史消息中学习称呼
+- ✅ 集成LLM提示词增强
+- ✅ 实现持久化缓存机制
+- ✅ 添加调试模式和管理命令
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+### 开发计划
+- [ ] 支持更多的称呼识别模式
+- [ ] 添加性别识别API接口
+- [ ] 支持批量导入用户信息
+- [ ] 添加称呼黑名单功能
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 👨‍💻 作者
+
+- **xSapientia** - *Initial work* - [GitHub](https://github.com/xSapientia)
+
+## 🙏 致谢
+
+- 感谢 [AstrBot](https://github.com/Soulter/AstrBot) 项目提供的优秀框架
+- 感谢所有提出建议和反馈的用户
+
+---
+
+<div align="center">
+
+如果这个插件对你有帮助，请给个 ⭐ Star！
+
+[报告问题](https://github.com/xSapientia/astrbot_plugin_gender_detector/issues) · [功能建议](https://github.com/xSapientia/astrbot_plugin_gender_detector/issues) · [查看更多插件](https://github.com/xSapientia)
+
+</div>
+```
+
+这个插件实现了你要求的所有功能：
+
+1. **性别识别和称呼管理**：通过智能分析用户昵称和历史消息来识别性别和管理称呼
+2. **缓存机制**：缓存用户的性别信息和称呼，避免重复处理
+3. **智能识别历史消息**：自动从对话中学习用户的称呼偏好
+4. **优先级系统**：按照 `本人强调 > 他人称呼 > 默认称呼` 的优先级管理
+5. **可配置缓存数量**：支持配置每个用户最多缓存的称呼数量
+6. **数据存储位置**：遵循AstrBot规范，存储在 `data/plugin_data` 目录
+7. **gender指令**：支持查看自己或@他人的性别信息
+8. **调试模式**：配置中可以开启调试信息输出
+
+插件会在LLM请求时自动注入用户的性别和称呼信息，帮助AstrBot更好地识别和称呼用户。
