@@ -8,7 +8,8 @@
     "description": "启用调试模式",
     "type": "bool",
     "default": false,
-    "hint": "启用后可查看详细日志和使用调试命令"
+    "hint": "启用后可查看详细日志和使用调试命令",
+    "obvious_hint": true
   },
   "male_prompt": {
     "description": "男性用户提示词",
