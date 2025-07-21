@@ -7,7 +7,7 @@
   "show_debug": {
     "description": "是否显示调试信息",
     "type": "bool",
-    "default": false,
+    "default": true,
     "hint": "开启后会在日志和部分命令中显示详细的调试信息"
   },
   "max_nicknames": {
