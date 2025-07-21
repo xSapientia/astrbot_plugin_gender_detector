@@ -79,20 +79,30 @@ class GenderDetectorPlugin(Star):
         }
 
         # 合并默认值和用户配置
+        config_changed = False
         for key, value in defaults.items():
             if key not in self.config:
                 self.config[key] = value
+                config_changed = True
             elif key == "default_nicknames" and isinstance(value, dict):
                 # 特殊处理嵌套的字典
                 if not isinstance(self.config[key], dict):
                     self.config[key] = value
+                    config_changed = True
                 else:
                     for sub_key, sub_value in value.items():
                         if sub_key not in self.config[key]:
                             self.config[key][sub_key] = sub_value
+                            config_changed = True
 
-        # 保存配置以确保持久化
-        self.config.save_config()
+        # 只有配置真正改变时才保存
+        if config_changed:
+            try:
+                self.config.save_config()
+                if self.config.get("debug", False):
+                    logger.info("插件配置已更新并保存")
+            except Exception as e:
+                logger.error(f"保存配置失败: {e}")
 
     def _load_cache(self, file_path: Path) -> Dict:
         """加载缓存文件"""
@@ -174,67 +184,73 @@ class GenderDetectorPlugin(Star):
             scanned_members = 0
 
             for platform in platforms:
-                if platform.platform_name != "aiocqhttp":
+                if not hasattr(platform, 'platform_name') or platform.platform_name != "aiocqhttp":
                     continue
 
                 try:
+                    # 获取客户端
+                    client = None
+                    if hasattr(platform, 'client'):
+                        client = platform.client
+                    elif hasattr(platform, 'bot'):
+                        client = platform.bot
+
+                    if not client:
+                        logger.error("无法获取aiocqhttp客户端")
+                        continue
+
                     # 获取群列表
-                    from astrbot.api.platform import AiocqhttpAdapter
-                    if isinstance(platform, AiocqhttpAdapter):
-                        client = platform.get_client()
+                    result = await client.api.call_action('get_group_list')
+                    if result and 'data' in result:
+                        groups = result['data']
 
-                        # 获取群列表
-                        result = await client.api.call_action('get_group_list')
-                        if result and 'data' in result:
-                            groups = result['data']
+                        for group in groups:
+                            group_id = str(group.get('group_id', ''))
+                            if not group_id:
+                                continue
 
-                            for group in groups:
-                                group_id = str(group.get('group_id', ''))
-                                if not group_id:
-                                    continue
+                            # 扫描群成员
+                            members_result = await client.api.call_action(
+                                'get_group_member_list',
+                                group_id=group_id
+                            )
 
-                                # 扫描群成员
-                                members_result = await client.api.call_action(
-                                    'get_group_member_list',
-                                    group_id=group_id
-                                )
+                            if members_result and 'data' in members_result:
+                                members = members_result['data']
+                                scanned_groups += 1
 
-                                if members_result and 'data' in members_result:
-                                    members = members_result['data']
-                                    scanned_groups += 1
+                                for member in members:
+                                    user_id = str(member.get('user_id', ''))
+                                    if not user_id:
+                                        continue
 
-                                    for member in members:
-                                        user_id = str(member.get('user_id', ''))
-                                        if not user_id:
-                                            continue
+                                    scanned_members += 1
 
-                                        scanned_members += 1
+                                    # 更新性别信息
+                                    gender = self._detect_gender_from_info(member)
+                                    if gender:
+                                        self.gender_cache[user_id] = {
+                                            'gender': gender,
+                                            'nickname': member.get('nickname', ''),
+                                            'update_time': asyncio.get_event_loop().time()
+                                        }
 
-                                        # 更新性别信息
-                                        gender = self._detect_gender_from_info(member)
-                                        if gender:
-                                            self.gender_cache[user_id] = {
-                                                'gender': gender,
-                                                'nickname': member.get('nickname', ''),
-                                                'update_time': asyncio.get_event_loop().time()
-                                            }
+                                    # 设置默认称呼
+                                    if user_id not in self.nickname_cache:
+                                        gender = self.gender_cache.get(user_id, {}).get('gender', '未知')
+                                        default_nickname = self._get_default_nickname(gender)
+                                        self.nickname_cache[user_id] = {
+                                            'nicknames': [(default_nickname, 1)],
+                                            'selected': default_nickname
+                                        }
 
-                                        # 设置默认称呼
-                                        if user_id not in self.nickname_cache:
-                                            gender = self.gender_cache.get(user_id, {}).get('gender', '未知')
-                                            default_nickname = self._get_default_nickname(gender)
-                                            self.nickname_cache[user_id] = {
-                                                'nicknames': [(default_nickname, 1)],
-                                                'selected': default_nickname
-                                            }
-
-                                        # 更新别名映射
-                                        nickname = member.get('nickname', '')
-                                        card = member.get('card', '')
-                                        if nickname:
-                                            self._update_user_alias(nickname, user_id)
-                                        if card and card != nickname:
-                                            self._update_user_alias(card, user_id)
+                                    # 更新别名映射
+                                    nickname = member.get('nickname', '')
+                                    card = member.get('card', '')
+                                    if nickname:
+                                        self._update_user_alias(nickname, user_id)
+                                    if card and card != nickname:
+                                        self._update_user_alias(card, user_id)
 
                 except Exception as e:
                     logger.error(f"扫描群成员时出错: {e}")
@@ -257,39 +273,53 @@ class GenderDetectorPlugin(Star):
             return None
 
         try:
-            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-            if isinstance(event, AiocqhttpMessageEvent):
+            # 获取客户端
+            client = None
+            if hasattr(event, 'bot'):
                 client = event.bot
+            elif hasattr(event, 'client'):
+                client = event.client
 
-                # 使用配置的超时时间
-                timeout = self.config.get("gender_api_timeout", 5)
+            if not client:
+                # 尝试从平台获取
+                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                if isinstance(event, AiocqhttpMessageEvent):
+                    client = event.bot
 
-                # 获取群成员信息或陌生人信息
-                if event.get_group_id():
-                    result = await asyncio.wait_for(
-                        client.api.call_action(
-                            'get_group_member_info',
-                            group_id=event.get_group_id(),
-                            user_id=user_id
-                        ),
-                        timeout=timeout
-                    )
-                else:
-                    result = await asyncio.wait_for(
-                        client.api.call_action(
-                            'get_stranger_info',
-                            user_id=user_id
-                        ),
-                        timeout=timeout
-                    )
+            if not client:
+                logger.error("无法获取aiocqhttp客户端")
+                return None
 
-                if result and 'data' in result:
-                    return result['data']
+            # 使用配置的超时时间
+            timeout = self.config.get("gender_api_timeout", 5)
+
+            # 获取群成员信息或陌生人信息
+            if event.get_group_id():
+                result = await asyncio.wait_for(
+                    client.api.call_action(
+                        'get_group_member_info',
+                        group_id=event.get_group_id(),
+                        user_id=user_id
+                    ),
+                    timeout=timeout
+                )
+            else:
+                result = await asyncio.wait_for(
+                    client.api.call_action(
+                        'get_stranger_info',
+                        user_id=user_id
+                    ),
+                    timeout=timeout
+                )
+
+            if result and 'data' in result:
+                return result['data']
+
         except asyncio.TimeoutError:
             logger.error(f"获取用户信息超时 {user_id}")
         except Exception as e:
             if self.config.get("debug", False):
-                logger.error(f"获取用户信息失败 {user_id}: {e}")
+                logger.error(f"获取用户信息失败 {user_id}: {e}", exc_info=True)
 
         return None
 
@@ -303,35 +333,50 @@ class GenderDetectorPlugin(Star):
             return self.group_members_cache[group_id]
 
         try:
-            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-            if isinstance(event, AiocqhttpMessageEvent):
+            # 获取客户端
+            client = None
+            if hasattr(event, 'bot'):
                 client = event.bot
-                result = await client.api.call_action(
-                    'get_group_member_list',
-                    group_id=group_id
-                )
+            elif hasattr(event, 'client'):
+                client = event.client
 
-                if result and 'data' in result:
-                    members = {}
-                    for member in result['data']:
-                        user_id = str(member.get('user_id', ''))
-                        if user_id:
-                            members[user_id] = member
+            if not client:
+                # 尝试从平台获取
+                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+                if isinstance(event, AiocqhttpMessageEvent):
+                    client = event.bot
 
-                            # 更新别名缓存
-                            nickname = member.get('nickname', '')
-                            card = member.get('card', '')  # 群名片
+            if not client:
+                logger.error("无法获取aiocqhttp客户端")
+                return {}
 
-                            if nickname:
-                                self._update_user_alias(nickname, user_id)
-                            if card and card != nickname:
-                                self._update_user_alias(card, user_id)
+            result = await client.api.call_action(
+                'get_group_member_list',
+                group_id=group_id
+            )
 
-                    self.group_members_cache[group_id] = members
-                    return members
+            if result and 'data' in result:
+                members = {}
+                for member in result['data']:
+                    user_id = str(member.get('user_id', ''))
+                    if user_id:
+                        members[user_id] = member
+
+                        # 更新别名缓存
+                        nickname = member.get('nickname', '')
+                        card = member.get('card', '')  # 群名片
+
+                        if nickname:
+                            self._update_user_alias(nickname, user_id)
+                        if card and card != nickname:
+                            self._update_user_alias(card, user_id)
+
+                self.group_members_cache[group_id] = members
+                return members
+
         except Exception as e:
             if self.config.get("debug", False):
-                logger.error(f"获取群成员列表失败 {group_id}: {e}")
+                logger.error(f"获取群成员列表失败 {group_id}: {e}", exc_info=True)
 
         return {}
 
@@ -727,7 +772,9 @@ class GenderDetectorPlugin(Star):
             members = await self._get_group_members(group_id, event)
 
             if not members:
-                yield event.plain_result("❌ 无法获取群成员信息")
+                if self.config.get("debug", False):
+                    logger.error(f"无法获取群成员信息，group_id: {group_id}")
+                yield event.plain_result("❌ 无法获取群成员信息，请确认机器人在群内且有相应权限")
                 return
 
             # 统计信息
@@ -911,13 +958,15 @@ class GenderDetectorPlugin(Star):
     async def reload_config(self, event: AstrMessageEvent):
         """重载配置（仅管理员）"""
         try:
-            # 强制保存当前配置
-            self.config.save_config()
-
             # 重新确保默认值
             self._ensure_default_config()
 
-            yield event.plain_result(f"✅ 配置已重载")
+            # 记录一些调试信息
+            if self.config.get("debug", False):
+                logger.info(f"配置重载完成，当前配置: {dict(self.config)}")
+
+            yield event.plain_result(f"✅ 配置已重载\n当前调试模式: {'开启' if self.config.get('debug', False) else '关闭'}")
+
         except Exception as e:
             logger.error(f"重载配置失败: {e}")
             yield event.plain_result("重载失败，请检查日志")
@@ -958,12 +1007,44 @@ class GenderDetectorPlugin(Star):
             logger.error(f"显示统计信息失败: {e}")
             yield event.plain_result("获取统计信息失败")
 
+    @filter.command("gender_config", alias={"性别配置", "查看配置"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def show_config(self, event: AstrMessageEvent):
+        """查看当前配置（仅管理员）"""
+        try:
+            config_info = "📋 性别检测插件配置\n\n"
+            config_info += f"🔧 调试模式: {'开启' if self.config.get('debug', False) else '关闭'}\n"
+            config_info += f"📝 最大称呼数: {self.config.get('max_nicknames', 5)}\n"
+            config_info += f"⏱️ API超时: {self.config.get('gender_api_timeout', 5)}秒\n"
+            config_info += f"📅 缓存过期: {self.config.get('cache_expire_days', 30)}天\n"
+            config_info += f"🎓 称呼学习: {'开启' if self.config.get('enable_nickname_learning', True) else '关闭'}\n"
+            config_info += f"🔍 智能识别: {'开启' if self.config.get('enable_smart_user_detection', True) else '关闭'}\n"
+            config_info += f"📆 每日扫描: {'开启' if self.config.get('enable_daily_scan', True) else '关闭'}\n"
+            config_info += f"⏰ 扫描时间: {self.config.get('daily_scan_time', '03:00')}\n"
+
+            default_nicknames = self.config.get("default_nicknames", {})
+            config_info += f"\n默认称呼:\n"
+            config_info += f"  🚹 男性: {default_nicknames.get('male', '小哥哥')}\n"
+            config_info += f"  🚺 女性: {default_nicknames.get('female', '小姐姐')}\n"
+            config_info += f"  ❓ 未知: {default_nicknames.get('unknown', '朋友')}"
+
+            yield event.plain_result(config_info)
+
+        except Exception as e:
+            logger.error(f"显示配置失败: {e}")
+            yield event.plain_result("获取配置失败")
+
     async def terminate(self):
         """插件卸载时的清理工作"""
+        # 保存所有缓存
         self._save_cache()
 
         # 保存配置
-        self.config.save_config()
+        try:
+            self.config.save_config()
+            logger.info("插件配置已保存")
+        except Exception as e:
+            logger.error(f"保存配置失败: {e}")
 
         # 删除配置文件
         config_file = Path("data/config/astrbot_plugin_gender_detector_config.json")
