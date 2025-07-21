@@ -24,18 +24,6 @@ class GenderDetector(Star):
         # config 是一个 AstrBotConfig 实例，它与磁盘上的JSON文件动态链接
         self.config = config
 
-        # 定义默认配置
-        defaults = {
-            "enable_plugin": True,
-            "show_debug": False,
-            "max_nicknames": 3,
-            "cache_expire_hours": 168,  # 7天
-            "male_prompt": "[用户性别: 男性]",
-            "female_prompt": "[用户性别: 女性]",
-            "unknown_prompt": "[用户性别: 未知]",
-            "prompt_position": "prefix"
-        }
-
         # 为配置对象填充默认值，但不会替换对象本身
         config_updated = False
         for key, value in defaults.items():
