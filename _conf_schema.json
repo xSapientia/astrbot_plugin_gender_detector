@@ -29,6 +29,12 @@
     "hint": "是否从聊天消息中自动学习用户称呼",
     "default": true
   },
+  "enable_smart_user_detection": {
+    "description": "启用智能用户识别",
+    "type": "bool",
+    "hint": "是否智能识别消息中提到但未@的用户",
+    "default": true
+  },
   "default_nicknames": {
     "description": "默认称呼配置",
     "type": "object",
