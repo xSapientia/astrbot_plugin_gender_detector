@@ -1,5 +1,5 @@
-name: astrbot_plugin_user_insightsastrbot_plugin_gender_detector
-desc: "深度用户洞察插件，缓存用户信息、分析称呼并注入LLM上下文。"
-version: 0.0.1
+name: astrbot_plugin_gender_detector
+desc: "智能识别用户性别并自动添加到LLM提示词的插件，支持QQ信息获取、历史消息分析等功能"
+version: v0.0.1
 author: xSapientia
 repo: https://github.com/xSapientia/astrbot_plugin_gender_detector
