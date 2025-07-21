@@ -11,11 +11,11 @@ from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
 
 @register(
-    "astrbot_plugin_user_insights",
+    "astrbot_plugin_gender_detector",
     "xSapientia",
     "深度用户洞察插件，缓存用户信息并注入LLM上下文。",
     "v0.0.1",
-    "https://github.com/xSapientia/astrbot_plugin_user_insights"
+    "https://github.com/xSapientia/astrbot_plugin_gender_detector"
 )
 class UserInsightsPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
