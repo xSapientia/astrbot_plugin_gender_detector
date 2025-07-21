@@ -21,20 +21,30 @@ from datetime import datetime, timedelta
 class GenderDetector(Star):
     def __init__(self, context: Context, config: AstrBotConfig = None):
         super().__init__(context)
-        self.config = config if config else AstrBotConfig()
 
-        # 默认配置
-        if not self.config:
-            self.config = {
-                "enable_plugin": True,
-                "show_debug": False,
-                "max_nicknames": 3,
-                "cache_expire_hours": 168,  # 7天
-                "male_prompt": "[用户性别: 男性]",
-                "female_prompt": "[用户性别: 女性]",
-                "unknown_prompt": "[用户性别: 未知]",
-                "prompt_position": "prefix"
-            }
+        # 初始化配置
+        self.config = config if config else {}
+
+        # 设置默认值
+        default_config = {
+            "enable_plugin": True,
+            "show_debug": False,
+            "max_nicknames": 3,
+            "cache_expire_hours": 168,  # 7天
+            "male_prompt": "[用户性别: 男性]",
+            "female_prompt": "[用户性别: 女性]",
+            "unknown_prompt": "[用户性别: 未知]",
+            "prompt_position": "prefix"
+        }
+
+        # 合并默认配置和用户配置
+        for key, default_value in default_config.items():
+            if key not in self.config:
+                self.config[key] = default_value
+
+        # 如果是 AstrBotConfig 实例，保存配置
+        if hasattr(self.config, 'save_config'):
+            self.config.save_config()
 
         # 设置数据存储路径
         self.plugin_data_dir = os.path.join("data", "plugin_data", "astrbot_plugin_gender_detector")
@@ -51,7 +61,8 @@ class GenderDetector(Star):
         # 加载持久化数据
         self._load_cache()
 
-        logger.info("Gender Detector v0.0.1 加载成功！")
+        # 输出调试信息确认配置状态
+        logger.info(f"Gender Detector v0.0.1 加载成功！调试模式: {self.config.get('show_debug', False)}")
 
         # 启动定期清理过期缓存的任务
         self.cleanup_task = asyncio.create_task(self._cleanup_expired_cache())
@@ -366,9 +377,7 @@ class GenderDetector(Star):
 
     @filter.command("gender_cache")
     async def show_cache_info(self, event: AstrMessageEvent):
-        """查看缓存统计信息（仅管理员）"""
-        # 这里可以添加权限检查
-
+        """查看缓存统计信息"""
         stats = f"""📊 性别检测插件缓存统计
 
 性别缓存: {len(self.gender_cache)} 条记录
@@ -383,6 +392,36 @@ class GenderDetector(Star):
 数据目录: {self.plugin_data_dir}"""
 
         yield event.plain_result(stats)
+
+    @filter.command("gender_debug")
+    async def debug_config(self, event: AstrMessageEvent):
+        """调试配置信息"""
+        config_info = f"""🔧 配置调试信息
+
+当前配置值:
+- enable_plugin: {self.config.get('enable_plugin')}
+- show_debug: {self.config.get('show_debug')}
+
+配置对象类型: {type(self.config)}
+配置内容: {json.dumps(dict(self.config), indent=2, ensure_ascii=False)}
+
+数据目录: {self.plugin_data_dir}
+缓存文件: {self.cache_file}
+缓存文件是否存在: {os.path.exists(self.cache_file)}"""
+
+        yield event.plain_result(config_info)
+
+    @filter.command("gender_toggle_debug")
+    async def toggle_debug(self, event: AstrMessageEvent):
+        """切换调试模式"""
+        current_debug = self.config.get('show_debug', False)
+        self.config['show_debug'] = not current_debug
+
+        # 保存配置
+        if hasattr(self.config, 'save_config'):
+            self.config.save_config()
+
+        yield event.plain_result(f"调试模式已{'开启' if self.config['show_debug'] else '关闭'}")
 
     async def terminate(self):
         """插件卸载时清理数据"""
