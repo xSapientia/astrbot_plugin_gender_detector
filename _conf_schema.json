@@ -4,42 +4,43 @@
     "type": "bool",
     "default": true
   },
-  "enable_debug": {
-    "description": "调试模式开关。启用后`/gender`指令会显示更详细的缓存和识别信息。",
-    "type": "bool",
-    "default": false
-  },
-  "max_nickname_cache": {
-    "description": "为每个用户缓存的昵称数量上限。目前为未来功能保留。",
+  "max_cached_addresses": {
+    "description": "每个用户最多缓存的称呼数量",
     "type": "int",
-    "default": 3,
-    "hint": "该功能将在未来版本中用于更智能的称呼识别。"
+    "default": 5,
+    "hint": "建议设置3-10之间，太多会占用存储空间"
   },
-  "prompt_position": {
-    "description": "将性别提示词添加到用户消息的前面还是后面。",
+  "debug_mode": {
+    "description": "调试模式",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后会在日志中输出详细的调试信息"
+  },
+  "male_default_address": {
+    "description": "男性默认称呼",
     "type": "string",
-    "default": "prefix",
-    "options": ["prefix", "suffix"]
+    "default": "先生"
   },
-  "male_prompt": {
-    "description": "当识别到用户为男性时，注入LLM请求的提示词。",
-    "type": "text",
-    "default": "[用户身份：男性]",
-    "editor_mode": true,
-    "editor_language": "text"
+  "female_default_address": {
+    "description": "女性默认称呼",
+    "type": "string",
+    "default": "女士"
   },
-  "female_prompt": {
-    "description": "当识别到用户为女性时，注入LLM请求的提示词。",
-    "type": "text",
-    "default": "[用户身份：女性]",
-    "editor_mode": true,
-    "editor_language": "text"
+  "unknown_default_address": {
+    "description": "性别未知时的默认称呼",
+    "type": "string",
+    "default": "朋友"
   },
-  "unknown_prompt": {
-    "description": "当无法识别用户性别时，注入LLM请求的提示词。",
-    "type": "text",
-    "default": "[用户身份：未知]",
-    "editor_mode": true,
-    "editor_language": "text"
+  "auto_detect_from_history": {
+    "description": "自动从历史消息中检测称呼",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后会自动分析消息中的称呼信息并缓存"
+  },
+  "cache_expiry_days": {
+    "description": "缓存过期天数",
+    "type": "int",
+    "default": 30,
+    "hint": "超过此天数的缓存会被视为过期"
   }
 }
