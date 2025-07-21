@@ -1,50 +1,45 @@
 {
   "enable_plugin": {
-    "description": "是否启用插件",
+    "description": "插件总开关",
     "type": "bool",
     "default": true
   },
-  "show_debug": {
-    "description": "是否显示调试信息",
+  "enable_debug": {
+    "description": "调试模式开关。启用后`/gender`指令会显示更详细的缓存和识别信息。",
     "type": "bool",
-    "default": true,
-    "hint": "开启后会在日志和部分命令中显示详细的调试信息"
+    "default": false
   },
-  "max_nicknames": {
-    "description": "每个用户最多缓存的昵称数量",
+  "max_nickname_cache": {
+    "description": "为每个用户缓存的昵称数量上限。目前为未来功能保留。",
     "type": "int",
     "default": 3,
-    "hint": "设置每个用户可以缓存的昵称数量上限"
-  },
-  "cache_expire_hours": {
-    "description": "缓存有效期（小时）",
-    "type": "int",
-    "default": 168,
-    "hint": "性别信息缓存的有效期，默认7天（168小时）"
-  },
-  "male_prompt": {
-    "description": "男性用户的提示词",
-    "type": "string",
-    "default": "[用户性别: 男性]",
-    "hint": "当检测到用户为男性时添加的提示词"
-  },
-  "female_prompt": {
-    "description": "女性用户的提示词",
-    "type": "string",
-    "default": "[用户性别: 女性]",
-    "hint": "当检测到用户为女性时添加的提示词"
-  },
-  "unknown_prompt": {
-    "description": "性别未知用户的提示词",
-    "type": "string",
-    "default": "[用户性别: 未知]",
-    "hint": "当无法确定用户性别时添加的提示词"
+    "hint": "该功能将在未来版本中用于更智能的称呼识别。"
   },
   "prompt_position": {
-    "description": "提示词插入位置",
+    "description": "将性别提示词添加到用户消息的前面还是后面。",
     "type": "string",
     "default": "prefix",
-    "options": ["prefix", "suffix"],
-    "hint": "选择将性别提示词插入到用户消息的前面(prefix)还是后面(suffix)"
+    "options": ["prefix", "suffix"]
+  },
+  "male_prompt": {
+    "description": "当识别到用户为男性时，注入LLM请求的提示词。",
+    "type": "text",
+    "default": "[用户身份：男性]",
+    "editor_mode": true,
+    "editor_language": "text"
+  },
+  "female_prompt": {
+    "description": "当识别到用户为女性时，注入LLM请求的提示词。",
+    "type": "text",
+    "default": "[用户身份：女性]",
+    "editor_mode": true,
+    "editor_language": "text"
+  },
+  "unknown_prompt": {
+    "description": "当无法识别用户性别时，注入LLM请求的提示词。",
+    "type": "text",
+    "default": "[用户身份：未知]",
+    "editor_mode": true,
+    "editor_language": "text"
   }
 }
