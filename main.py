@@ -10,7 +10,6 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.message_components import At, Plain
-from astrbot.api.platform import AiocqhttpAdapter
 
 @register(
     "astrbot_plugin_gender_detector",
@@ -92,10 +91,22 @@ class GenderDetectorPlugin(Star):
     async def _get_user_info_from_platform(self, event: AstrMessageEvent, uid: str) -> Optional[Dict]:
         """从平台获取用户信息"""
         try:
-            if event.get_platform_name() == "aiocqhttp":
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                if isinstance(event, AiocqhttpMessageEvent):
-                    client = event.bot
+            # 获取平台名称
+            platform_name = event.get_platform_name()
+
+            if platform_name == "aiocqhttp":
+                # 使用更通用的方式获取client
+                try:
+                    # 尝试从event获取bot/client对象
+                    client = None
+                    if hasattr(event, 'bot'):
+                        client = event.bot
+                    elif hasattr(event.message_obj, 'bot'):
+                        client = event.message_obj.bot
+
+                    if not client:
+                        logger.error("无法获取client对象")
+                        return None
 
                     # 获取用户信息
                     user_info = await client.api.get_stranger_info(user_id=int(uid))
@@ -126,6 +137,21 @@ class GenderDetectorPlugin(Star):
                         **group_info,
                         "cache_time": datetime.now().isoformat()
                     }
+                except Exception as e:
+                    logger.error(f"aiocqhttp平台获取用户信息失败: {e}")
+                    return None
+
+            else:
+                # 其他平台暂时返回基础信息
+                logger.info(f"平台 {platform_name} 暂不支持获取详细用户信息")
+                return {
+                    "uid": uid,
+                    "nickname": event.get_sender_name(),
+                    "sex": "unknown",
+                    "age": 0,
+                    "cache_time": datetime.now().isoformat()
+                }
+
         except Exception as e:
             logger.error(f"获取用户信息失败: {e}")
         return None
@@ -145,37 +171,48 @@ class GenderDetectorPlugin(Star):
         stats = {"male": 0, "female": 0, "unknown": 0}
 
         try:
-            if event.get_platform_name() == "aiocqhttp":
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                if isinstance(event, AiocqhttpMessageEvent):
+            platform_name = event.get_platform_name()
+
+            if platform_name == "aiocqhttp":
+                # 获取client
+                client = None
+                if hasattr(event, 'bot'):
                     client = event.bot
+                elif hasattr(event.message_obj, 'bot'):
+                    client = event.message_obj.bot
 
-                    # 获取群成员列表
-                    members = await client.api.get_group_member_list(group_id=int(group_id))
+                if not client:
+                    logger.error("无法获取client对象")
+                    return stats
 
-                    for member in members:
-                        uid = str(member.get("user_id"))
-                        user_info = await self._get_user_info_from_platform(event, uid)
+                # 获取群成员列表
+                members = await client.api.get_group_member_list(group_id=int(group_id))
 
-                        if user_info:
-                            self.user_cache[uid] = user_info
-                            sex = user_info.get("sex", "unknown")
-                            if sex == "male":
-                                stats["male"] += 1
-                            elif sex == "female":
-                                stats["female"] += 1
-                            else:
-                                stats["unknown"] += 1
+                for member in members:
+                    uid = str(member.get("user_id"))
+                    user_info = await self._get_user_info_from_platform(event, uid)
 
-                    self._save_cache()
+                    if user_info:
+                        self.user_cache[uid] = user_info
+                        sex = user_info.get("sex", "unknown")
+                        if sex == "male":
+                            stats["male"] += 1
+                        elif sex == "female":
+                            stats["female"] += 1
+                        else:
+                            stats["unknown"] += 1
 
-                    # 更新扫描记录
-                    self.scan_schedule[group_id] = {
-                        "last_scan": datetime.now().isoformat(),
-                        "member_count": len(members),
-                        "stats": stats
-                    }
-                    self._save_scan_schedule()
+                self._save_cache()
+
+                # 更新扫描记录
+                self.scan_schedule[group_id] = {
+                    "last_scan": datetime.now().isoformat(),
+                    "member_count": len(members),
+                    "stats": stats
+                }
+                self._save_scan_schedule()
+            else:
+                logger.info(f"平台 {platform_name} 暂不支持群成员扫描")
 
         except Exception as e:
             logger.error(f"扫描群成员失败: {e}")
@@ -229,44 +266,56 @@ class GenderDetectorPlugin(Star):
     async def _analyze_history_messages(self, event: AstrMessageEvent, count: int = 100):
         """分析历史消息，提取用户称呼"""
         try:
-            if event.get_platform_name() == "aiocqhttp":
-                from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-                if isinstance(event, AiocqhttpMessageEvent):
-                    client = event.bot
+            platform_name = event.get_platform_name()
 
-                    # 获取历史消息
-                    if event.get_group_id():
+            if platform_name == "aiocqhttp":
+                # 获取client
+                client = None
+                if hasattr(event, 'bot'):
+                    client = event.bot
+                elif hasattr(event.message_obj, 'bot'):
+                    client = event.message_obj.bot
+
+                if not client:
+                    logger.error("无法获取client对象")
+                    return
+
+                # 获取历史消息
+                if event.get_group_id():
+                    try:
                         messages = await client.api.get_group_msg_history(
                             group_id=int(event.get_group_id()),
                             count=count
                         )
-                    else:
-                        # 私聊历史消息需要其他API
-                        return
 
-                    # 分析消息中的称呼
-                    user_aliases = defaultdict(set)
+                        # 分析消息中的称呼
+                        user_aliases = defaultdict(set)
 
-                    for msg in messages.get("messages", []):
-                        sender_id = str(msg.get("sender", {}).get("user_id", ""))
-                        message_text = msg.get("message", "")
+                        for msg in messages.get("messages", []):
+                            sender_id = str(msg.get("sender", {}).get("user_id", ""))
+                            message_text = msg.get("message", "")
 
-                        # 提取称呼
-                        mentions = self._analyze_mentions_in_text(message_text)
+                            # 提取称呼
+                            mentions = self._analyze_mentions_in_text(message_text)
 
-                        # 更新别名缓存
-                        for mention in mentions:
-                            if sender_id in self.user_cache:
-                                if "aliases" not in self.user_cache[sender_id]:
-                                    self.user_cache[sender_id]["aliases"] = []
+                            # 更新别名缓存
+                            for mention in mentions:
+                                if sender_id in self.user_cache:
+                                    if "aliases" not in self.user_cache[sender_id]:
+                                        self.user_cache[sender_id]["aliases"] = []
 
-                                max_aliases = self.config.get("max_aliases", 5)
-                                if mention not in self.user_cache[sender_id]["aliases"]:
-                                    self.user_cache[sender_id]["aliases"].append(mention)
-                                    self.user_cache[sender_id]["aliases"] = \
-                                        self.user_cache[sender_id]["aliases"][-max_aliases:]
+                                    max_aliases = self.config.get("max_aliases", 5)
+                                    if mention not in self.user_cache[sender_id]["aliases"]:
+                                        self.user_cache[sender_id]["aliases"].append(mention)
+                                        self.user_cache[sender_id]["aliases"] = \
+                                            self.user_cache[sender_id]["aliases"][-max_aliases:]
 
-                    self._save_cache()
+                        self._save_cache()
+                    except Exception as e:
+                        logger.warning(f"获取群消息历史失败，可能是API不支持: {e}")
+                else:
+                    # 私聊历史消息需要其他API
+                    pass
 
         except Exception as e:
             logger.error(f"分析历史消息失败: {e}")
