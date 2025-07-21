@@ -82,6 +82,23 @@ class GenderDetectorPlugin(Star):
         except Exception as e:
             logger.error(f"保存称呼优先级失败: {e}")
 
+    def _parse_gender(self, sex_value) -> str:
+        """解析性别值"""
+        if isinstance(sex_value, int):
+            # QQ API 返回数字
+            if sex_value == 1:
+                return "男"
+            elif sex_value == 2:
+                return "女"
+        elif isinstance(sex_value, str):
+            # 字符串形式
+            if sex_value.lower() == "male" or sex_value == "1":
+                return "男"
+            elif sex_value.lower() == "female" or sex_value == "2":
+                return "女"
+
+        return "未知"
+
     async def _get_user_info_from_platform(self, event: AstrMessageEvent, user_id: str) -> Optional[Dict]:
         """从平台获取用户信息"""
         if event.get_platform_name() == "aiocqhttp":
@@ -93,20 +110,20 @@ class GenderDetectorPlugin(Star):
                     # 获取用户信息
                     user_info = await client.api.call_action('get_stranger_info', user_id=int(user_id))
 
-                    gender = "未知"
-                    if user_info.get("sex") == "male":
-                        gender = "男"
-                    elif user_info.get("sex") == "female":
-                        gender = "女"
+                    self._debug_log(f"获取用户 {user_id} 原始信息: {user_info}")
+
+                    gender = self._parse_gender(user_info.get("sex"))
 
                     return {
                         "user_id": user_id,
                         "nickname": user_info.get("nickname", "未知"),
                         "gender": gender,
+                        "raw_sex": user_info.get("sex"),  # 保存原始值用于调试
                         "update_time": datetime.now().isoformat()
                     }
             except Exception as e:
                 self._debug_log(f"获取用户 {user_id} 信息失败: {e}")
+                logger.error(f"获取用户信息失败: {e}")
         return None
 
     async def _scan_group_members(self, event: AstrMessageEvent) -> Dict[str, Dict]:
@@ -123,19 +140,22 @@ class GenderDetectorPlugin(Star):
                     # 获取群成员列表
                     members = await client.api.call_action('get_group_member_list', group_id=group_id)
 
+                    self._debug_log(f"获取到群成员列表，共 {len(members)} 人")
+
                     for member in members:
                         user_id = str(member.get("user_id"))
-                        gender = "未知"
-                        if member.get("sex") == "male":
-                            gender = "男"
-                        elif member.get("sex") == "female":
-                            gender = "女"
+
+                        # 调试信息
+                        self._debug_log(f"处理成员 {user_id}: sex={member.get('sex')}, nickname={member.get('nickname')}")
+
+                        gender = self._parse_gender(member.get("sex"))
 
                         scanned_users[user_id] = {
                             "user_id": user_id,
                             "nickname": member.get("nickname", "未知"),
                             "card": member.get("card", ""),  # 群名片
                             "gender": gender,
+                            "raw_sex": member.get("sex"),  # 保存原始值用于调试
                             "role": member.get("role", "member"),  # owner/admin/member
                             "update_time": datetime.now().isoformat()
                         }
@@ -146,8 +166,16 @@ class GenderDetectorPlugin(Star):
                     self._save_cache()
                     self._debug_log(f"扫描群 {group_id} 完成，共 {len(scanned_users)} 个成员")
 
+                    # 统计性别分布
+                    if self.config.get("show_debug_info", False):
+                        male_count = sum(1 for u in scanned_users.values() if u.get("gender") == "男")
+                        female_count = sum(1 for u in scanned_users.values() if u.get("gender") == "女")
+                        unknown_count = len(scanned_users) - male_count - female_count
+                        self._debug_log(f"性别分布: 男={male_count}, 女={female_count}, 未知={unknown_count}")
+
             except Exception as e:
                 logger.error(f"扫描群成员失败: {e}")
+                self._debug_log(f"扫描群成员详细错误: {str(e)}")
 
         return scanned_users
 
@@ -437,6 +465,11 @@ class GenderDetectorPlugin(Star):
                 nicknames = [f"{item['nickname']}(优先级{item['priority']})"
                            for item in self.nickname_priorities[target_user_id]]
                 yield event.plain_result(f"已缓存的称呼: {', '.join(nicknames)}")
+
+            # 调试模式下显示原始数据
+            if self.config.get("show_debug_info", False):
+                raw_sex = user_info.get("raw_sex", "N/A")
+                yield event.plain_result(f"[调试] 原始性别值: {raw_sex}")
         else:
             yield event.plain_result("无法获取用户信息，请稍后重试")
 
@@ -465,6 +498,14 @@ class GenderDetectorPlugin(Star):
             result += f"男性: {male_count} 人\n"
             result += f"女性: {female_count} 人\n"
             result += f"未知: {unknown_count} 人"
+
+            # 调试模式下显示详细信息
+            if self.config.get("show_debug_info", False) and unknown_count > 0:
+                unknown_users = [f"{u['nickname']}(sex={u.get('raw_sex')})"
+                               for u in scanned.values() if u.get("gender") == "未知"]
+                result += f"\n\n[调试] 未知性别用户:\n" + "\n".join(unknown_users[:10])
+                if len(unknown_users) > 10:
+                    result += f"\n... 还有 {len(unknown_users) - 10} 个未显示"
 
             yield event.plain_result(result)
         else:
