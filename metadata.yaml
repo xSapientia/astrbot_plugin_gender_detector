@@ -1,5 +1,5 @@
 name: astrbot_plugin_gender_detector
-author: YourName
+author: xSapientia
 desc: 识别用户性别并添加到LLM prompt的插件
 version: 0.0.1
 repo: https://github.com/yourusername/astrbot_plugin_gender_detector
