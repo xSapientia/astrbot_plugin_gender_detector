@@ -15,11 +15,11 @@ from astrbot.api.star import Context, Star, register
 
 
 @register(
-    "astrbot_plugin_user_info_manager",
+    "astrbot_plugin_gender_detector",
     "xSapientia",
     "智能管理用户信息并增强LLM对话体验的插件",
     "0.0.1",
-    "https://github.com/xSapientia/astrbot_plugin_user_info_manager",
+    "https://github.com/xSapientia/astrbot_plugin_gender_detector",
 )
 class UserInfoManager(Star):
     def __init__(self, context: Context, config: dict):
