@@ -1,71 +1,63 @@
 {
-  "debug": {
-    "description": "调试模式",
+  "enable_plugin": {
+    "description": "插件总开关",
     "type": "bool",
-    "hint": "开启后会在日志中显示详细的调试信息",
+    "default": true
+  },
+  "show_debug_info": {
+    "description": "显示调试信息",
+    "type": "bool",
     "default": false
   },
-  "max_nicknames": {
-    "description": "最大缓存称呼数量",
+  "max_cached_nicknames": {
+    "description": "每个用户最多缓存的称呼数量",
     "type": "int",
-    "hint": "每个用户最多缓存的称呼数量",
-    "default": 5
-  },
-  "gender_api_timeout": {
-    "description": "API超时时间(秒)",
-    "type": "int",
-    "hint": "获取用户信息API的超时时间",
-    "default": 5
-  },
-  "cache_expire_days": {
-    "description": "缓存过期天数",
-    "type": "int",
-    "hint": "性别信息缓存的有效期(天)",
-    "default": 30
-  },
-  "enable_nickname_learning": {
-    "description": "启用称呼学习",
-    "type": "bool",
-    "hint": "是否从聊天消息中自动学习用户称呼",
-    "default": true
-  },
-  "enable_smart_user_detection": {
-    "description": "启用智能用户识别",
-    "type": "bool",
-    "hint": "是否智能识别消息中提到但未@的用户",
-    "default": true
+    "default": 5,
+    "hint": "设置每个用户可以缓存的称呼数量上限"
   },
   "enable_daily_scan": {
-    "description": "启用每日扫描",
+    "description": "启用每日自动扫描群成员",
     "type": "bool",
-    "hint": "是否每天自动扫描所有群成员信息",
     "default": true
   },
   "daily_scan_time": {
     "description": "每日扫描时间",
     "type": "string",
-    "hint": "格式：HH:MM，例如 03:00 表示凌晨3点",
-    "default": "03:00"
+    "default": "03:00",
+    "hint": "格式为 HH:MM，24小时制"
   },
-  "default_nicknames": {
-    "description": "默认称呼配置",
+  "cache_settings": {
+    "description": "缓存设置",
     "type": "object",
-    "hint": "不同性别的默认称呼设置",
     "items": {
-      "male": {
-        "description": "男性默认称呼",
-        "type": "string",
-        "default": "小哥哥"
+      "cache_expire_days": {
+        "description": "缓存过期天数",
+        "type": "int",
+        "default": 30,
+        "hint": "用户信息缓存的有效期（天）"
       },
-      "female": {
-        "description": "女性默认称呼",
-        "type": "string",
-        "default": "小姐姐"
+      "auto_clean_cache": {
+        "description": "自动清理过期缓存",
+        "type": "bool",
+        "default": true
+      }
+    }
+  },
+  "cleanup_on_uninstall": {
+    "description": "卸载时清理数据",
+    "type": "object",
+    "items": {
+      "delete_plugin_data": {
+        "description": "删除插件数据目录",
+        "type": "bool",
+        "default": false,
+        "obvious_hint": true,
+        "hint": "警告：删除后所有缓存的用户信息将丢失"
       },
-      "unknown": {
-        "description": "未知性别默认称呼",
-        "type": "string",
-        "default": "朋友"
+      "delete_config": {
+        "description": "删除配置文件",
+        "type": "bool",
+        "default": false
       }
     }
   }
